@@ -26,3 +26,11 @@ Graph -> Trained Model -> Matching Config
 - Data augmentation
 - Modelling macro-level interventions on the system
 - Data compression
+
+## TODOs
+
+- set up docker (det. CUDA version; )
+- set up uv
+- set up wandb project
+- set up DVC
+- set up pre-commit (and refresh it by migrating to ruff)
