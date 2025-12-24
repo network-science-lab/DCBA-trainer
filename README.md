@@ -27,9 +27,35 @@ Graph -> Trained Model -> Matching Config
 - Modelling macro-level interventions on the system
 - Data compression
 
+## Setting up the environment
+
+(A) Clone the code into the persisting directory on your workstation, e.g., `XXX`
+
+(B) Create container
+
+1. Install docker with support for CUDA
+
+2. Pull the image:
+
+```bash
+docker pull ghcr.io/anty-filidor/mlaudio:gamma-uv
+```
+
+3. Run the container:
+
+```bash
+docker run -itd \
+	--gpus all \
+	--name dcba \
+	--shm-size=8gb \
+	--cpus=16 \
+	--memory=64g \
+	--mount type=bind,source=/home/$USER/XXX,target=/workspace/XXX \
+	ghcr.io/anty-filidor/mlaudio:gamma-uv
+```
+
 ## TODOs
 
-- set up docker (det. CUDA version; )
 - set up uv
 - set up wandb project
 - set up DVC
