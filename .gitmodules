@@ -1,3 +1,0 @@
-[submodule ".pre_commit"]
-	path = .pre_commit
-	url = git@github.com:anty-filidor/template-python.git
