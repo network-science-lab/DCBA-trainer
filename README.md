@@ -76,7 +76,5 @@ Graph -> Trained Model -> Matching Config
 
 ## TODOs
 
-- set up uv
 - set up wandb project
 - set up DVC
-- set up pre-commit (and refresh it by migrating to ruff)
