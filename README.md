@@ -1,4 +1,4 @@
-# Graph -> Config or DCBA
+# DCBA
 
 This repository contains research code addressing the problem of graph configuration retrieval, that
 is how to obtain parameters of a synthetic graph generator (e.g. ABCD) given the graph.
@@ -9,23 +9,13 @@ Pre-Training).
 
 ## Idea
 
-**Training**
-
-```
-Graph -> Embedding  .
-                     \
-                      => Contrastive learning -> Joint representation
-                     /
-Config -> Embedding .
-```
-
-**Inference**
+**Given a graph `g` find a set of parameters `q` according to which it can be generated with ABCD.**
 
 ```
 Graph -> Trained Model -> Matching Config
 ```
 
-**Use Cases**
+Use Cases:
 
 - Data augmentation
 - Modelling macro-level interventions on the system
@@ -74,7 +64,83 @@ Graph -> Trained Model -> Matching Config
 
 3. To update `pre-commit` visit [this](https://github.com/anty-filidor/template-python) repository.
 
+# Doodles
+
+## Data
+
+- pairs config, graph: `(q, g)`
+- the configurational space should not be too large
+- graphs also shouldn't be too big, but as for me no smaller than 1000 nodes
+- use diverse configuration
+
+## Architecture
+
+### Config Encoder
+
+- use a simple autoencoder
+- can be a stacked MLP (?)
+
+```
+q - config
+h_q - config's emgedding
+
+q -> h_q -> q_hat
+```
+
+### Graph Encoder
+
+- take a graphformer's instance (?)
+- should be a pretrained model as these guys are big
+
+```
+g - graph
+h_g - graph's embedding
+
+g -> h_g
+```
+
+## Training
+
+- aimed to align embeddings of pairs (q, g) thus make q_hat sensible given the graph
+- after training we expect that: h_q ~ h_g
+
+### Idea A
+
+- easier than CLIP-based approaches, can be too shallow, but does not require so much data
+- joined training of both encoders
+- minimise the loss:
+
+```
+L = \lambda_1 ||h_q - h_g||^2 + \lambda_2 ||q_hat - q||^2
+```
+
+- intuition is that the loss is a weighted error of discrepancy between corresponding config-based
+  and graph based embeddings plus weighted error of retrieving the configuration by the autoencoder
+
+### Idea B
+
+- derived from CLIPs, requires large training batches (min 256)
+- contrastive learning par excellence
+- minimise the loss:
+
+```
+L = InfoNCE(q, g)
+
+1. compute cross-modal cosine similarity in a batch
+2. store similarities in a square matrix, with row-indices matching h_q and column-indices matching h_g and ordered by graph-config equivalence
+3. for each row try to make diagonal entry bigger than the sum of latter entries
+4. dito for columns
+```
+
 ## TODOs
 
 - set up wandb project
-- set up DVC
+- set up DVC cloud
+- distribute coding tasks
+- generate the dataset
+- investigate available graph embedders
+
+# Links
+
+https://github.com/openai/CLIP -> trained OpenAI's CLIP
+https://github.com/mlfoundations/open_clip?tab=readme-ov-file -> open implementation of CLIP
