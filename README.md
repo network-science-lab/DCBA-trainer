@@ -136,9 +136,12 @@ L = InfoNCE(q, g)
 
 - set up wandb project
 - set up DVC cloud
-- distribute coding tasks
 - generate the dataset
 - investigate available graph embedders
+
+1. Training pipeline (Mateusz)
+2. Auto encoder for configuration (Michal)
+3. Continuous training (Łukasz)
 
 # Links
 
