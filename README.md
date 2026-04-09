@@ -135,8 +135,7 @@ L = InfoNCE(q, g)
 ## TODOs
 
 - set up wandb project
-- set up DVC cloud
-- generate the dataset
+- add the baseline estimator
 - investigate available graph embedders
 
 1. Training pipeline (Mateusz)
