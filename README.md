@@ -136,6 +136,7 @@ L = InfoNCE(q, g)
 
 - set up wandb project
 - add the baseline estimator
+- Dlaczego nie robimy bezpośrednio konfig -> graf tylko dwa enkodery?
 - investigate available graph embedders
 
 1. Training pipeline (Mateusz)
