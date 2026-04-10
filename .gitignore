@@ -1,0 +1,14 @@
+**/__pycache__
+**/.DS_Store
+*.egg-info
+*.json
+!.claude/settings.json
+.claude/skills/*-workspace/
+.idea
+.mypy_cache
+.pytest_cache
+.ruff_cache
+.vscode
+.venv
+examples
+PLAN.md
