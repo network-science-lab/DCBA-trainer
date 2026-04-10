@@ -1,2 +1,5 @@
 # Ignore all HTML files:
 *.html
+
+# Claude Code configuration — managed by the tool, not by prettier
+.claude/
