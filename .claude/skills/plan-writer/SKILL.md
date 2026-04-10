@@ -17,30 +17,37 @@ Good plans are short: a handful of clearly-ordered steps, each with enough conte
 *why* it is needed and enough specificity (concrete commands, file paths, expected outcomes) to
 execute it without guesswork.
 
+The user owns the design — your job is to ask good questions, capture their thinking, and
+translate it into a concrete, executable plan. Do not make architectural or design decisions
+independently. If you find yourself researching "what the best approach would be", stop and ask
+the user instead.
+
 ---
 
 ## Workflow
 
-### 1. Understand the request
+### 1. Interview the user
 
-Identify what the user wants to implement. If the scope is ambiguous, ask one focused clarifying
-question before proceeding — not a list of questions.
+Before touching the codebase, have a short conversation to understand what the user wants to
+build and how. Ask focused questions — one or two at a time — to surface:
 
-### 2. Research the codebase
+- What the feature does and why it is needed
+- Key design decisions: interfaces, data structures, algorithms, dependencies
+- Any constraints or preferences they have (e.g. "keep it simple", "mirror the existing X pattern")
 
-Before writing a single line of the plan, explore the relevant parts of the repo so the plan
-reflects actual file names, module structure, and existing patterns rather than assumptions.
-Typical things to check:
+Keep going until you have enough to write a concrete plan. A good signal: you could hand the
+plan to someone else and they would know exactly what to build without having to ask the user
+anything.
 
-- `README.md` for project purpose and setup
-- `pyproject.toml` for declared dependencies, version, and tool configuration
-- Existing source modules related to the feature area
-- Existing tests for conventions and patterns in use
-- Any prior `PLAN.md` or similar artefacts for stylistic reference
+Do not ask for information you can look up yourself (file paths, existing class names, etc.).
 
-Use the Explore subagent (or direct Glob/Grep/Read calls) for this. The depth of research should
-match the complexity of the task — a one-module addition needs less research than a cross-cutting
-architectural change.
+### 2. Look up only what is needed to be concrete
+
+Once you know *what* to build, do targeted codebase lookups to fill in the specifics the plan
+needs: exact file paths, class and function names to extend or call, config keys, etc.
+
+Use direct Glob/Grep/Read calls for this — it should be quick and focused, not a broad
+exploration.
 
 ### 3. Write PLAN.md
 
