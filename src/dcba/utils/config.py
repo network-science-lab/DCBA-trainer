@@ -14,5 +14,5 @@ def load_config(cfg: DictConfig) -> dict:
         containing the Hydra runtime configuration.
     """
     config = OmegaConf.to_container(cfg, resolve=True)
-    config["hydra"] = OmegaConf.to_container(HydraConfig.get(), resolve=True)
+    config["hydra"] = OmegaConf.to_container(HydraConfig.get(), resolve=False)
     return config
