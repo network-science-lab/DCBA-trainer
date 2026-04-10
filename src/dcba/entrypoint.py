@@ -3,7 +3,10 @@
 from pathlib import Path
 
 import hydra
+from dotenv import load_dotenv
 from omegaconf import DictConfig
+
+load_dotenv()  # populate os.environ from .env if present; no-op otherwise
 
 _CONFIGS_PATH = Path(__file__).parent.parent.parent / "configs"
 

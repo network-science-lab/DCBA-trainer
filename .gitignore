@@ -5,12 +5,14 @@
 !.claude/settings.json
 .claude/settings.local.json
 .claude/skills/*-workspace/
+.env
 .idea
+.wandb
 .mypy_cache
-outputs
 .pytest_cache
 .ruff_cache
 .vscode
 .venv
 examples
+outputs
 # PLAN.md

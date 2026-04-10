@@ -13,6 +13,7 @@ dependencies = [
     "lightning>=2.6.1",
     "omegaconf>=2.3.0",
     "pyg-lib>=0.4.0",
+    "python-dotenv>=1.2.2",
     "torch>=2.5.1",
     "torch-geometric>=2.5",
     "torch-scatter>=2.1.2",
@@ -38,9 +39,15 @@ build-backend = "uv_build"
 # - torch_geometric 2.7.0 bug: llm/utils/backend_utils.py still imports from
 #   torch_geometric.distributed, which emits a deprecation warning since 2.7.0.
 #   No newer release is available to upgrade to.
+# - wandb 0.25.1 bug: sentry.py uses a deprecated Scope.user setter and app_url
+#   utility from the sentry-sdk. 0.25.1 is the latest release available.
 filterwarnings = [
     "ignore:.*torch_geometric\\.distributed.*has been deprecated:DeprecationWarning",
+    "ignore:.*`Scope\\.user`.*deprecated.*`Scope\\.set_user\\(\\)`:DeprecationWarning",
+    "ignore:.*`app_url`.*setting.*Settings object:DeprecationWarning",
 ]
+addopts = "-m 'not wandb'"
+markers = ["wandb: marks tests that require a live wandb connection (deselected by default)"]
 
 [tool.uv]
 find-links = ["https://data.pyg.org/whl/torch-2.5.1+cu121.html"]
