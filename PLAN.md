@@ -270,3 +270,8 @@ this only checks imports and config loading):
 ```bash
 uv run dcba-train training.accelerator=cpu training.devices=1 training.max_epochs=1
 ```
+
+- the dataset should be reforged into a module. i'll put \_config_to_tensor to a dedicated
+  transrorms.py file to use torch.transform lib and inherit from BaseTransform. also it shall be
+  renamed to explicitly show it's for ABCD not mABCD. in the dataset module we will later add a
+  dataset for hraphs or for both configs and graphs with some negative sampling logic.

@@ -1,4 +1,4 @@
-"""Training entrypoint — invoke via ``uv run dcba-train``."""
+"""CLI entrypoint for training — invoke via ``uv run dcba-train``."""
 
 from pathlib import Path
 

@@ -1,21 +1,18 @@
 """Lightning logger factory."""
 
 import logging
+from unittest.mock import MagicMock
 
 from lightning.pytorch import loggers
 
 logger = logging.getLogger(__name__)
 
 
-class _DummyLogger:
+class DummyLogger(MagicMock):
     """No-op logger used when WandbLogger cannot be initialised."""
 
-    def __getattr__(self, name: str):
-        """Return a no-op callable for any attribute access."""
-        return lambda *a, **kw: None
 
-
-def get_logger(config: dict) -> loggers.WandbLogger | _DummyLogger:
+def get_logger(config: dict) -> loggers.WandbLogger | DummyLogger:
     """
     Return a WandbLogger configured from the training config, or a no-op dummy on failure.
 
@@ -23,7 +20,7 @@ def get_logger(config: dict) -> loggers.WandbLogger | _DummyLogger:
         :func:`~dcba.utils.config.load_config`).
 
     :returns: A :class:`~lightning.pytorch.loggers.WandbLogger` if wandb is reachable,
-        otherwise a :class:`_DummyLogger` that silently absorbs all calls.
+        otherwise a :class:`DummyLogger` that silently absorbs all calls.
     """
     try:
         return loggers.WandbLogger(
@@ -34,4 +31,4 @@ def get_logger(config: dict) -> loggers.WandbLogger | _DummyLogger:
         )
     except Exception as exc:
         logger.warning("WandbLogger not initialised — using dummy. Reason: %s", exc)
-        return _DummyLogger()
+        return DummyLogger()

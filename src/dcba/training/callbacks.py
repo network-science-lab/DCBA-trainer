@@ -1,13 +1,13 @@
 """Lightning callback factory."""
 
-from lightning.pytorch.callbacks import Callback, EarlyStopping, ModelCheckpoint
+from lightning.pytorch.callbacks import Callback, EarlyStopping, ModelCheckpoint, ModelSummary
 
 
 def get_callbacks(config: dict) -> list[Callback]:
     """
     Build a list of Lightning callbacks from the training config.
 
-    Supported callback names: ``model_checkpoint``, ``early_stopping``.
+    Supported callback names: ``model_checkpoint``, ``early_stopping``, ``model_summary``.
 
     :param config: Full resolved training config dict (as returned by
         :func:`~dcba.utils.config.load_config`).
@@ -35,4 +35,6 @@ def get_callbacks(config: dict) -> list[Callback]:
                     patience=cb.get("patience", 10),
                 )
             )
+        elif name == "model_summary":
+            callbacks.append(ModelSummary(max_depth=cb.get("max_depth", -1)))
     return callbacks

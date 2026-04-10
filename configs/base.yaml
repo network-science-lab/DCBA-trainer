@@ -1,5 +1,8 @@
-base:
-  random_seed: 42
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+random_seed: 42
 
 data: {} # TBD
 
@@ -29,3 +32,5 @@ training:
       monitor: val_loss
       mode: min
       patience: 20
+    - name: model_summary
+      max_depth: -1

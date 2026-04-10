@@ -27,7 +27,7 @@ dev = [
 ]
 
 [project.scripts]
-dcba-train = "dcba.train:main"
+dcba-train = "dcba.entrypoint:main"
 
 [build-system]
 requires = ["uv_build>=0.9.18,<0.10.0"]
