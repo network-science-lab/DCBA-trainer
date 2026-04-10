@@ -1,13 +1,20 @@
 [project]
 name = "dcba"
-version = "0.1.0"
+version = "0.2.0"
 description = "Graph configuration retrieval: recover ABCD generator parameters from a given graph via contrastive learning."
 readme = "README.md"
 authors = [
     { name = "Michał Czuba", email = "michal.czuba.1995@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "dcba-data-set",
+    "pyg-lib>=0.4.0",
+    "torch>=2.5.1",
+    "torch-geometric>=2.5",
+    "torch-scatter>=2.1.2",
+    "torch-sparse>=0.6.18",
+]
 
 [dependency-groups]
 dev = [
@@ -21,3 +28,25 @@ dcba = "dcba:main"
 [build-system]
 requires = ["uv_build>=0.9.18,<0.10.0"]
 build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+# Suppress known third-party warnings that cannot be fixed in this codebase:
+# - torch_geometric 2.7.0 bug: llm/utils/backend_utils.py still imports from
+#   torch_geometric.distributed, which emits a deprecation warning since 2.7.0.
+#   No newer release is available to upgrade to.
+filterwarnings = [
+    "ignore:.*torch_geometric\\.distributed.*has been deprecated:DeprecationWarning",
+]
+
+[tool.uv]
+find-links = ["https://data.pyg.org/whl/torch-2.5.1+cu121.html"]
+no-build-package = ["torch-scatter", "torch-sparse", "pyg-lib"]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu121" }
+dcba-data-set = { path = "../DCBA-data-set", editable = true }
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+explicit = true
