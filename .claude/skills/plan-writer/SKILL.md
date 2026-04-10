@@ -86,6 +86,11 @@ Rules:
   before every commit — that is already in its workflow)
 - Write in British English throughout
 - Be concrete: name actual files, modules, and functions rather than "update the relevant file"
+- **Keep code snippets to interface contracts only** — show signatures, return types, and
+  integration points, not full method bodies. Full implementations bias the dev-assistant
+  toward a specific approach and bypass their judgment. Include a code block only when prose
+  would be genuinely ambiguous (e.g. an exact method signature, a config key name). Never
+  include a working implementation that could simply be copy-pasted.
 
 ---
 
