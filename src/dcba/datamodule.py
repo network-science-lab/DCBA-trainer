@@ -6,7 +6,7 @@ import lightning.pytorch as pl
 from dcba_data_set.graph_io import load_report
 from torch.utils.data import DataLoader
 
-from dcba.dataset import DCBAConfigDataset
+from dcba.dataset import ConfigDataset
 
 
 class DCBADataModule(pl.LightningDataModule):
@@ -38,9 +38,9 @@ class DCBADataModule(pl.LightningDataModule):
         self._batch_size = batch_size
         self._num_workers = num_workers
 
-        self._train_dataset: DCBAConfigDataset | None = None
-        self._val_dataset: DCBAConfigDataset | None = None
-        self._test_dataset: DCBAConfigDataset | None = None
+        self._train_dataset: ConfigDataset | None = None
+        self._val_dataset: ConfigDataset | None = None
+        self._test_dataset: ConfigDataset | None = None
 
     def setup(self, stage: str | None = None) -> None:
         """
@@ -67,9 +67,9 @@ class DCBADataModule(pl.LightningDataModule):
         val_ids = set(instance_ids[n_train : n_train + n_val])
         test_ids = set(instance_ids[n_train + n_val :])
 
-        self._train_dataset = DCBAConfigDataset({k: configs[k] for k in train_ids})
-        self._val_dataset = DCBAConfigDataset({k: configs[k] for k in val_ids})
-        self._test_dataset = DCBAConfigDataset({k: configs[k] for k in test_ids})
+        self._train_dataset = ConfigDataset({k: configs[k] for k in train_ids})
+        self._val_dataset = ConfigDataset({k: configs[k] for k in val_ids})
+        self._test_dataset = ConfigDataset({k: configs[k] for k in test_ids})
 
     def train_dataloader(self) -> DataLoader:
         """Return the training DataLoader."""
