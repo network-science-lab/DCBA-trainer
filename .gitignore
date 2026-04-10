@@ -3,6 +3,7 @@
 *.egg-info
 *.json
 !.claude/settings.json
+.claude/settings.local.json
 .claude/skills/*-workspace/
 .idea
 .mypy_cache
