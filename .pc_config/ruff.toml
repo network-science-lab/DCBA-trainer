@@ -1,0 +1,33 @@
+line-length = 100
+indent-width = 4
+target-version = "py312"
+
+# Exclude paths (Flake8 extend-exclude equivalent)
+exclude = [
+    "*/migrations/*",
+    "*/tests/*",
+]
+
+# Enable Flake8-equivalent rule sets
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "D",   # pydocstyle
+    "I",   # isort
+]
+ignore = [
+    "D105", # missing docstring in magic method
+    "E203", # whitespace before ':'
+]
+
+[lint.pydocstyle]
+convention = "pep257"
+
+[lint.isort]
+combine-as-imports = true
+force-wrap-aliases = false
+
+[lint.flake8-tidy-imports]
+ban-relative-imports = "all"

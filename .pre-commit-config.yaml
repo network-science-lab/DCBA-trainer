@@ -1,0 +1,67 @@
+# Pre-commit configuration file.
+# see https://pre-commit.com for more information
+# see https://pre-commit.com/hooks.html for more hooks
+
+repos:
+  # Out of the box hooks for pre-commit
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-xml
+      - id: check-case-conflict
+      - id: check-docstring-first
+      - id: debug-statements
+      - id: check-added-large-files
+        args: ["--maxkb=5000"]
+
+  # Ruff
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.10
+    hooks:
+      - id: ruff-check
+        args: [--verbose, --config=.pc_config/ruff.toml, --fix]
+      - id: ruff-format
+        args: [--verbose, --config=.pc_config/ruff.toml]
+
+  # Hook to validate static typing in the code
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.19.1
+    hooks:
+      - id: mypy
+        args: [--config=.pc_config/mypy.ini]
+        additional_dependencies: [types-PyYAML, types-requests]
+
+  # Hook to auto-format non python files (i.a. md, yaml, xml, json)
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v3.1.0
+    hooks:
+      - id: prettier
+        args:
+          [
+            --ignore-path=.pc_config/.prettierignore,
+            --config=.pc_config/.prettierrc,
+            --ignore-unknown,
+          ]
+
+  # Hooks to format C sources clang-format (formatter)
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v21.1.8
+    hooks:
+      - id: clang-format
+        args: [--style=Google]
+
+  # Hook to automatically trigger tests (it will pass if no tests are found too - exit code is 5)
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: sh -c '.pc_config/test_runner.sh'
+        types: [python]
+        verbose: true
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
