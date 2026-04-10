@@ -3,7 +3,7 @@
 import pytest
 from dcba_data_set.graph_io import load_report
 
-from dcba.paths import TEST_ABCD_REPORT, TEST_MABCD_REPORT
+from dcba.utils.paths import TEST_ABCD_REPORT, TEST_MABCD_REPORT
 
 
 @pytest.mark.parametrize(
