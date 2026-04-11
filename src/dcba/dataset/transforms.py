@@ -10,6 +10,9 @@ from torch_geometric.transforms import BaseTransform
 #: Ordered list of numerical ABCD config keys used as model input features.
 ABCD_CONFIG_KEYS: list[str] = ["n", "t1", "t2", "xi", "c_min", "c_max", "d_min", "d_max", "nout"]
 
+#: Indices within :data:`ABCD_CONFIG_KEYS` that correspond to integer-valued parameters.
+ABCD_INT_FEATURE_INDICES: list[int] = [0, 4, 5, 6, 7, 8]  # n, c_min, c_max, d_min, d_max, nout
+
 
 @lru_cache()
 def abcd_param_bounds(n_max: int = 10_000) -> dict[str, tuple[float, float]]:
@@ -77,11 +80,16 @@ class ABCDConfigScaler:
         """
         Recover the original scale from a normalised tensor.
 
+        Integer-valued features (indices :data:`ABCD_INT_FEATURE_INDICES`) are rounded to the
+        nearest whole number after the linear inverse map.  The tensor dtype remains ``float32``.
+
         :param x: Normalised float tensor of shape ``(..., 9)``.
 
         :returns: Tensor in the original feature scale.
         """
-        return x * (self._hi - self._lo) + self._lo
+        out = x * (self._hi - self._lo) + self._lo
+        out[..., ABCD_INT_FEATURE_INDICES] = out[..., ABCD_INT_FEATURE_INDICES].round()
+        return out
 
     def __call__(self, x: Tensor) -> Tensor:
         """Apply :meth:`transform`."""
