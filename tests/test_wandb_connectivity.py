@@ -18,10 +18,7 @@ _CONFIG = {
             "name": "connectivity-test",
             "tags": ["sanity"],
         },
-    },
-    "hydra": {
-        "run": {"dir": ".wandb"},
-    },
+    }
 }
 
 
