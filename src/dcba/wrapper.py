@@ -11,6 +11,7 @@ from unittest.mock import MagicMock
 
 import lightning.pytorch as pl
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import wandb
 from lightning.pytorch.loggers import WandbLogger
@@ -35,6 +36,8 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
     :param scaler: Optional scaler used to inverse-transform normalised tensors back
         to human-readable values before logging.  When ``None``, raw normalised values
         are logged with column names suffixed ``_norm``.
+    :param loss_fn: Optional loss module to use instead of ``F.mse_loss``.  When ``None``,
+        plain MSE is used (default behaviour).
     """
 
     def __init__(
@@ -42,12 +45,14 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
         encoder: ConfigEncoder,
         optimizer_config: dict,
         scaler: ABCDConfigScaler | None = None,
+        loss_fn: nn.Module | None = None,
     ) -> None:
-        """Initialise the wrapper with the encoder, optimiser settings, and optional scaler."""
+        """Initialise the wrapper with the encoder, optimiser settings, and optional loss."""
         super().__init__()
         self._encoder = encoder
         self._optimizer_config = optimizer_config
         self._scaler = scaler
+        self._loss_fn = loss_fn
         self._test_rows: list[tuple[list[float], list[float]]] = []
 
     def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
@@ -63,7 +68,9 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
     def _step(self, batch: tuple[Tensor, Tensor], stage: str) -> Tensor:
         x, target = batch
         _, x_hat = self._encoder(x)
-        loss = F.mse_loss(x_hat, target)
+        loss = (
+            self._loss_fn(x_hat, target) if self._loss_fn is not None else F.mse_loss(x_hat, target)
+        )
         self.log(f"{stage}_loss", loss, prog_bar=True)
         return loss
 
