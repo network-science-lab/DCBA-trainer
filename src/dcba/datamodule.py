@@ -6,16 +6,22 @@ import lightning.pytorch as pl
 from dcba_data_set.graph_io import load_report
 from torch.utils.data import DataLoader
 
-from dcba.dataset import ConfigDataset
+from dcba.dataset import ABCDConfigScaler, ABCDConfigToTensor, ConfigDataset
 
 
-class DCBADataModule(pl.LightningDataModule):
+class ConfigDataModule(pl.LightningDataModule):
     """
     LightningDataModule that loads an ABCD report and splits it into train/val/test sets.
 
-    Splitting is performed on ``instance_id`` keys to prevent data leakage between splits.
+    Handles config-only data (no graphs).  Splitting is performed on ``instance_id`` keys
+    to prevent data leakage between splits.  A :class:`~dcba.dataset.ABCDConfigScaler` is
+    built during :meth:`setup` and stored as :attr:`scaler` so the training wrapper can
+    retrieve it for inference.
 
     :param report_path: Path to the ``report.json`` manifest.
+    :param n_max: Maximum graph size in the dataset.  Controls the upper bound of all
+        node-count-dependent features in the scaler (``n``, ``c_min``, ``c_max``,
+        ``d_min``, ``d_max``, ``nout``).
     :param val_ratio: Fraction of instances to use for validation.
     :param test_ratio: Fraction of instances to use for testing.
     :param batch_size: Number of samples per dataloader batch.
@@ -25,6 +31,7 @@ class DCBADataModule(pl.LightningDataModule):
     def __init__(
         self,
         report_path: Path,
+        n_max: int = 10_000,
         val_ratio: float = 0.1,
         test_ratio: float = 0.1,
         batch_size: int = 32,
@@ -33,6 +40,7 @@ class DCBADataModule(pl.LightningDataModule):
         """Initialise the data module with dataset path and split/loader parameters."""
         super().__init__()
         self._report_path = Path(report_path)
+        self._n_max = n_max
         self._val_ratio = val_ratio
         self._test_ratio = test_ratio
         self._batch_size = batch_size
@@ -41,6 +49,7 @@ class DCBADataModule(pl.LightningDataModule):
         self._train_dataset: ConfigDataset | None = None
         self._val_dataset: ConfigDataset | None = None
         self._test_dataset: ConfigDataset | None = None
+        self.scaler: ABCDConfigScaler | None = None
 
     def setup(self, stage: str | None = None) -> None:
         """
@@ -67,9 +76,15 @@ class DCBADataModule(pl.LightningDataModule):
         val_ids = set(instance_ids[n_train : n_train + n_val])
         test_ids = set(instance_ids[n_train + n_val :])
 
-        self._train_dataset = ConfigDataset({k: configs[k] for k in train_ids})
-        self._val_dataset = ConfigDataset({k: configs[k] for k in val_ids})
-        self._test_dataset = ConfigDataset({k: configs[k] for k in test_ids})
+        self.scaler = ABCDConfigScaler(n_max=self._n_max)
+        to_tensor = ABCDConfigToTensor()
+
+        def transform(record):  # type: ignore[no-untyped-def]
+            return self.scaler(to_tensor(record))
+
+        self._train_dataset = ConfigDataset({k: configs[k] for k in train_ids}, transform=transform)
+        self._val_dataset = ConfigDataset({k: configs[k] for k in val_ids}, transform=transform)
+        self._test_dataset = ConfigDataset({k: configs[k] for k in test_ids}, transform=transform)
 
     def train_dataloader(self) -> DataLoader:
         """Return the training DataLoader."""

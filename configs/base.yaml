@@ -4,11 +4,21 @@ hydra:
 
 random_seed: 42
 
-data: {} # TBD
+data:
+  report_path: ??? # must be overridden at runtime
+  n_max: 10000 # upper bound for all node-count-dependent scaler features
+  val_ratio: 0.1
+  test_ratio: 0.1
+  batch_size: 32
+  num_workers: 0
 
-model: {} # TBD
+model:
+  input_dim: 9
+  hidden_dims: [64]
+  embedding_dim: 32
 
 training:
+  wrapper: config_autoencoder
   accelerator: gpu
   devices: [0]
   max_epochs: 100
