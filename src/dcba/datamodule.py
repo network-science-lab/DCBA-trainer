@@ -6,7 +6,7 @@ import lightning.pytorch as pl
 from dcba_data_set.graph_io import load_report
 from torch.utils.data import DataLoader
 
-from dcba.dataset import ABCDConfigScaler, ABCDConfigToTensor, ConfigDataset
+from dcba.dataset import ABCDConfigScaler, ConfigDataset
 
 
 class ConfigDataModule(pl.LightningDataModule):
@@ -77,14 +77,10 @@ class ConfigDataModule(pl.LightningDataModule):
         test_ids = set(instance_ids[n_train + n_val :])
 
         self.scaler = ABCDConfigScaler(n_max=self._n_max)
-        to_tensor = ABCDConfigToTensor()
 
-        def transform(record):  # type: ignore[no-untyped-def]
-            return self.scaler(to_tensor(record))
-
-        self._train_dataset = ConfigDataset({k: configs[k] for k in train_ids}, transform=transform)
-        self._val_dataset = ConfigDataset({k: configs[k] for k in val_ids}, transform=transform)
-        self._test_dataset = ConfigDataset({k: configs[k] for k in test_ids}, transform=transform)
+        self._train_dataset = ConfigDataset({k: configs[k] for k in train_ids}, scaler=self.scaler)
+        self._val_dataset = ConfigDataset({k: configs[k] for k in val_ids}, scaler=self.scaler)
+        self._test_dataset = ConfigDataset({k: configs[k] for k in test_ids}, scaler=self.scaler)
 
     def train_dataloader(self) -> DataLoader:
         """Return the training DataLoader."""
