@@ -22,6 +22,14 @@ training:
   accelerator: gpu
   devices: [0]
   max_epochs: 100
+  loss:
+    name: mse
+    args: {}
+  # To use the constraint-penalty loss:
+  # loss:
+  #   name: abcd_constraint
+  #   args:
+  #     lambda_penalty: 1.0
   optimizer:
     name: AdamW
     args:

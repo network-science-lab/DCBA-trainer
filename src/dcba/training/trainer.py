@@ -3,16 +3,37 @@
 from pathlib import Path
 
 import lightning.pytorch as pl
+import torch.nn as nn
 
 from dcba.datamodule import ConfigDataModule
 from dcba.models.config_encoder import ConfigEncoder
 from dcba.training.callbacks import get_callbacks
 from dcba.training.loggers import get_logger
+from dcba.training.loss import ABCDConstraintPenaltyLoss
 from dcba.wrapper import ConfigAutoencoderWrapper
 
 _WRAPPERS = {
     "config_autoencoder": ConfigAutoencoderWrapper,
 }
+
+_LOSSES: dict[str, type[nn.Module]] = {
+    "mse": nn.MSELoss,
+    "abcd_constraint": ABCDConstraintPenaltyLoss,
+}
+
+
+def _build_loss(loss_cfg: dict) -> nn.Module:
+    """
+    Instantiate a loss module from a config dict.
+
+    :param loss_cfg: Dict with ``name`` (str) and ``args`` (dict) keys.
+
+    :returns: A loss module instance.
+    """
+    name = loss_cfg["name"]
+    if name not in _LOSSES:
+        raise ValueError(f"Unknown loss '{name}'. Available: {list(_LOSSES)}")
+    return _LOSSES[name](**loss_cfg.get("args", {}))
 
 
 def train(config: dict) -> None:
@@ -43,10 +64,14 @@ def train(config: dict) -> None:
         embedding_dim=model_cfg["embedding_dim"],
     )
 
+    loss_fn = _build_loss(config["training"]["loss"])
+
     wrapper_name = config["training"]["wrapper"]
     if wrapper_name not in _WRAPPERS:
         raise ValueError(f"Unknown wrapper '{wrapper_name}'. Available: {list(_WRAPPERS)}")
-    wrapper = _WRAPPERS[wrapper_name](encoder, config["training"]["optimizer"]["args"])
+    wrapper = _WRAPPERS[wrapper_name](
+        encoder, config["training"]["optimizer"]["args"], loss_fn=loss_fn
+    )
 
     trainer = pl.Trainer(
         max_epochs=config["training"]["max_epochs"],
