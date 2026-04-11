@@ -5,11 +5,11 @@ hydra:
 random_seed: 42
 
 data:
-  report_path: ??? # must be overridden at runtime
+  report_path: "test/dataset_abcd/report.json"
   n_max: 10000 # upper bound for all node-count-dependent scaler features
   val_ratio: 0.1
   test_ratio: 0.1
-  batch_size: 32
+  batch_size: 1
   num_workers: 0
 
 model:
