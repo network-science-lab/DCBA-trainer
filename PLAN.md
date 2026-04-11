@@ -1,126 +1,69 @@
-# Config Autoencoder — Phase 1 Implementation
+# Enrich test output with config reconstruction table
 
 ## Steps
 
-### 0. Hardcode ABCD parameter bounds in `transforms.py`
+### 0. Accept scaler on the wrapper
 
-The `ABCDConfigScaler` (see Step 1) needs per-feature `(lo, hi)` bounds to normalise each of the 9
-config fields to `[0, 1]`. These bounds must be sourced from the actual ABCD model constraints
-defined in the `dcba_data_set` package — **do not invent or guess them**.
+`ConfigAutoencoderWrapper` currently has no access to the `ABCDConfigScaler`, which is needed to
+inverse-transform normalised tensors back to human-readable values before logging.
 
-Search the `dcba_data_set` repo for the authoritative bounds:
-
-```bash
-grep -r "t1\|t2\|xi\|c_min\|c_max\|d_min\|d_max\|nout\|n_min\|n_max" \
-    /workspace/dev/DCBA-data-set/src --include="*.py" -n
-```
-
-Also read `/workspace/dev/DCBA-data-set/src/dcba_data_set/julia_ports/abcd.py` and the `ABCDConfig`
-validators to confirm which fields have hard upper/lower limits.
-
-Once found, define a module-level constant in `src/dcba/dataset/transforms.py`:
+Add an optional `scaler` parameter to `ConfigAutoencoderWrapper.__init__` in `src/dcba/wrapper.py`:
 
 ```python
-#: Per-feature (lo, hi) bounds sourced from ABCDGraphGenerator.jl constraints.
-ABCD_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
-    "n":     (..., ...),
-    "t1":    (..., ...),
-    # etc.
-}
+def __init__(
+    self,
+    encoder: ConfigEncoder,
+    optimizer_config: dict,
+    scaler: ABCDConfigScaler | None = None,
+) -> None:
 ```
 
----
+Store it as `self._scaler`. Import `ABCDConfigScaler` from `dcba.dataset`.
 
-### 1. Add `ABCDConfigScaler` to `transforms.py`
+### 1. Set the scaler after fit in the trainer
 
-Add the scaler to the existing `src/dcba/dataset/transforms.py` — no new file needed.
+`datamodule.scaler` is populated inside `datamodule.setup()`, which Lightning calls during
+`trainer.fit()` — so the scaler does not exist yet at wrapper construction time.
 
-The class takes optional `bounds` (defaults to `ABCD_PARAM_BOUNDS`) and exposes two methods:
+In `src/dcba/training/trainer.py`, between `trainer.fit()` and `trainer.test()`, assign the scaler
+to the wrapper:
 
-- `transform(x: Tensor) -> Tensor` — normalise to `[0, 1]` per feature
-- `inverse_transform(x: Tensor) -> Tensor` — recover original scale
-
-The inverse must be exact (linear map), making it usable during inference to recover human-readable
-configs from model output.
-
-Export `ABCDConfigScaler` from `src/dcba/dataset/__init__.py`.
-
-Update `DCBADataModule.setup()` to build an `ABCDConfigScaler` and compose it with
-`ABCDConfigToTensor` into a single callable transform passed to each `ConfigDataset` split. Store
-the scaler on the data module as `self.scaler` so the wrapper can retrieve it for inference.
-
----
-
-### 2. Implement `ConfigEncoder`
-
-Replace the stub in `src/dcba/models/config_encoder.py` with a parametrisable MLP autoencoder.
-
-Constructor: `__init__(self, input_dim: int, hidden_dims: list[int], embedding_dim: int)`.
-
-Architecture:
-
-- Encoder: `input_dim → hidden_dims[0] → … → embedding_dim` with ReLU between layers
-- Decoder: mirrors encoder in reverse, no activation on output
-
-Public interface — keep `encode` and `decode` separate so the joint wrapper (Phase 2) can call them
-independently:
-
-- `encode(x: Tensor) -> Tensor`
-- `decode(h: Tensor) -> Tensor`
-- `forward(x: Tensor) -> tuple[Tensor, Tensor]` — returns `(h_q, x_hat)`
-
-Suggested default: `hidden_dims=[64]`, `embedding_dim=32`. The `embedding_dim` is the key knob — it
-must match whatever the graph encoder produces in Phase 2.
-
----
-
-### 3. Add `ConfigAutoencoderWrapper` to `wrapper.py`
-
-Phase 1 trains only the config autoencoder. Future phases will add a graph encoder and joint loss.
-Use **separate `LightningModule` subclasses per training regime** — the `train()` function selects
-the right one from config. This avoids mode flags and keeps each wrapper focused.
-
-Rename/replace the existing stub with `ConfigAutoencoderWrapper(pl.LightningModule)`.
-
-It should accept a `ConfigEncoder` and an `optimizer_config` dict, compute MSE reconstruction loss
-in `training_step` / `validation_step` / `test_step`, and build an `AdamW` optimiser in
-`configure_optimizers`. Log `{stage}_loss` at each step.
-
-Future wrappers (`JointWrapper`, etc.) go in the same file and are selected via `training.wrapper`
-in the Hydra config.
-
----
-
-### 4. Wire up `train()` and complete `configs/base.yaml`
-
-**`src/dcba/training/trainer.py`** — remove `raise NotImplementedError`. Build a `_WRAPPERS` dict
-mapping string names to classes (e.g. `"config_autoencoder": ConfigAutoencoderWrapper`). Instantiate
-`DCBADataModule`, `ConfigEncoder`, and the wrapper named in `config["training"]["wrapper"]`, then
-call `trainer.fit()` and `trainer.test()`.
-
-**`configs/base.yaml`** — fill in the currently empty `data` and `model` sections and add
-`training.wrapper`:
-
-```yaml
-data:
-  report_path: ??? # must be overridden at runtime
-  val_ratio: 0.1
-  test_ratio: 0.1
-  batch_size: 32
-  num_workers: 0
-
-model:
-  input_dim: 9
-  hidden_dims: [64]
-  embedding_dim: 32
-
-training:
-  wrapper: config_autoencoder
-  # ... rest unchanged
+```python
+trainer.fit(wrapper, datamodule=datamodule)
+wrapper._scaler = datamodule.scaler
+trainer.test(wrapper, datamodule=datamodule)
 ```
 
-Run:
+### 2. Accumulate per-sample rows during test_step
 
-```bash
-uv run dcba-train data.report_path=/path/to/report.json
+Override `on_test_epoch_start` in `ConfigAutoencoderWrapper` to reset a `self._test_rows`
+accumulator (a plain `list`).
+
+In `test_step`, after the forward pass, detach `x` and `x_hat`, move them to CPU, apply
+`self._scaler.inverse_transform(...)` if a scaler is set, and append each sample in the batch as a
+row to `self._test_rows`. Each row is a flat list of floats:
+
 ```
+[orig_n, orig_t1, …, orig_nout, recon_n, recon_t1, …, recon_nout]
+```
+
+If `self._scaler` is `None`, log the raw (normalised) values with a note in the column names.
+
+### 3. Log a wandb Table in on_test_epoch_end
+
+Override `on_test_epoch_end` in `ConfigAutoencoderWrapper`. Build a `wandb.Table` whose columns are
+`[f"orig_{k}" for k in ABCD_CONFIG_KEYS] + [f"recon_{k}" for k in ABCD_CONFIG_KEYS]` and whose data
+is `self._test_rows`.
+
+Log it via the Lightning logger's underlying wandb run:
+
+```python
+self.logger.experiment.log({"test/reconstructions": table})
+```
+
+Guard the wandb call: only execute it when `self.logger` has a real wandb experiment (i.e.
+`hasattr(self.logger, "experiment")` and the experiment is not a `MagicMock`). Import
+`ABCD_CONFIG_KEYS` from `dcba.dataset.transforms` and `wandb` at the top of `wrapper.py`.
+
+Verify: after a training run, the wandb run page should show a `test/reconstructions` table with one
+row per test sample and 18 float columns.

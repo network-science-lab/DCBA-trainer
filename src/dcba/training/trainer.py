@@ -57,4 +57,5 @@ def train(config: dict) -> None:
         logger=get_logger(config),
     )
     trainer.fit(wrapper, datamodule=datamodule)
+    wrapper._scaler = datamodule.scaler
     trainer.test(wrapper, datamodule=datamodule)
