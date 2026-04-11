@@ -1,69 +1,115 @@
-# Enrich test output with config reconstruction table
+# ABCD Constraint Penalty Loss & Scaler Dtype Fix
 
-## Steps
+## Steps (each step each commit)
 
-### 0. Accept scaler on the wrapper
+### 1. Fix `ABCDConfigScaler.inverse_transform` dtypes
 
-`ConfigAutoencoderWrapper` currently has no access to the `ABCDConfigScaler`, which is needed to
-inverse-transform normalised tensors back to human-readable values before logging.
-
-Add an optional `scaler` parameter to `ConfigAutoencoderWrapper.__init__` in `src/dcba/wrapper.py`:
+In `src/dcba/dataset/transforms.py`, add a module-level constant listing the indices of
+integer-valued ABCD features:
 
 ```python
-def __init__(
-    self,
-    encoder: ConfigEncoder,
-    optimizer_config: dict,
-    scaler: ABCDConfigScaler | None = None,
-) -> None:
+#: Indices within ABCD_CONFIG_KEYS that correspond to integer-valued parameters.
+ABCD_INT_FEATURE_INDICES: list[int] = [0, 4, 5, 6, 7, 8]  # n, c_min, c_max, d_min, d_max, nout
 ```
 
-Store it as `self._scaler`. Import `ABCDConfigScaler` from `dcba.dataset`.
+Then update `ABCDConfigScaler.inverse_transform` to round those features to the nearest integer
+after the linear inverse map. The tensor dtype stays `float32`; rounding ensures that integer fields
+(e.g. `n`) surface as whole numbers in downstream `.tolist()` calls and wandb tables.
 
-### 1. Set the scaler after fit in the trainer
+Export `ABCD_INT_FEATURE_INDICES` from `src/dcba/dataset/__init__.py`.
 
-`datamodule.scaler` is populated inside `datamodule.setup()`, which Lightning calls during
-`trainer.fit()` — so the scaler does not exist yet at wrapper construction time.
+Verify: instantiate `ABCDConfigScaler`, call `.inverse_transform` on a normalised tensor, and
+confirm that positions 0, 4, 5, 6, 7, 8 have no fractional part.
 
-In `src/dcba/training/trainer.py`, between `trainer.fit()` and `trainer.test()`, assign the scaler
-to the wrapper:
+### 2. Implement `ABCDConstraintPenaltyLoss`
+
+In `src/dcba/training/loss.py`, implement the new loss class. All arithmetic is done in
+**normalised** space (values expected in `[0, 1]`), which is what the model produces and trains on.
+
+The loss is: `MSE(x_hat, target) + λ * Σ penalties`, where each penalty term is `relu(violation)²`.
+
+Two categories of penalty:
+
+**Per-feature range** — applied to all 9 features of `x_hat`:
+
+- Below-range: `relu(-x_hat[:, i])`
+- Above-range: `relu(x_hat[:, i] - 1)`
+
+**Cross-parameter ordering** — using feature indices from `ABCD_CONFIG_KEYS`: | Constraint |
+Violation expression | |---|---| | `c_min ≤ c_max` | `relu(x_hat[:, 4] - x_hat[:, 5])` | |
+`d_min ≤ d_max` | `relu(x_hat[:, 6] - x_hat[:, 7])` | | `c_max ≤ n` |
+`relu(x_hat[:, 5] - x_hat[:, 0])` | | `nout ≤ n` | `relu(x_hat[:, 8] - x_hat[:, 0])` |
+
+Interface:
 
 ```python
-trainer.fit(wrapper, datamodule=datamodule)
-wrapper._scaler = datamodule.scaler
-trainer.test(wrapper, datamodule=datamodule)
+class ABCDConstraintPenaltyLoss(nn.Module):
+    """
+    MSE reconstruction loss augmented with squared-hinge penalties for ABCD config constraints.
+
+    :param lambda_penalty: Weight applied to the sum of constraint penalty terms.
+    """
+
+    def __init__(self, lambda_penalty: float = 1.0) -> None: ...
+
+    def forward(self, x_hat: Tensor, target: Tensor) -> Tensor:
+        """
+        Compute MSE + λ · Σ relu(violation)².
+
+        :param x_hat: Reconstructed normalised config tensor of shape ``(batch, 9)``.
+        :param target: Ground-truth normalised config tensor of shape ``(batch, 9)``.
+
+        :returns: Scalar loss tensor.
+        """
 ```
 
-### 2. Accumulate per-sample rows during test_step
+Export the class from `src/dcba/training/__init__.py`.
 
-Override `on_test_epoch_start` in `ConfigAutoencoderWrapper` to reset a `self._test_rows`
-accumulator (a plain `list`).
+### 3. Accept `loss_fn` in `ConfigAutoencoderWrapper`
 
-In `test_step`, after the forward pass, detach `x` and `x_hat`, move them to CPU, apply
-`self._scaler.inverse_transform(...)` if a scaler is set, and append each sample in the batch as a
-row to `self._test_rows`. Each row is a flat list of floats:
+In `src/dcba/wrapper.py`, add an optional `loss_fn: nn.Module | None = None` parameter to
+`ConfigAutoencoderWrapper.__init__`. When `None`, fall back to `F.mse_loss` (current behaviour).
+Store it as `self._loss_fn`.
 
-```
-[orig_n, orig_t1, …, orig_nout, recon_n, recon_t1, …, recon_nout]
-```
+Update `_step` to call `self._loss_fn(x_hat, target)` when a loss function is set, otherwise keep
+the existing `F.mse_loss` call.
 
-If `self._scaler` is `None`, log the raw (normalised) values with a note in the column names.
+### 4. Wire loss selection through `trainer.py` and `configs/base.yaml`
 
-### 3. Log a wandb Table in on_test_epoch_end
-
-Override `on_test_epoch_end` in `ConfigAutoencoderWrapper`. Build a `wandb.Table` whose columns are
-`[f"orig_{k}" for k in ABCD_CONFIG_KEYS] + [f"recon_{k}" for k in ABCD_CONFIG_KEYS]` and whose data
-is `self._test_rows`.
-
-Log it via the Lightning logger's underlying wandb run:
+Add a `_LOSSES` registry in `src/dcba/training/trainer.py` mapping string names to loss
+constructors:
 
 ```python
-self.logger.experiment.log({"test/reconstructions": table})
+_LOSSES: dict[str, type[nn.Module]] = {
+    "mse": None,  # sentinel — wrapper uses F.mse_loss
+    "abcd_constraint": ABCDConstraintPenaltyLoss,
+}
 ```
 
-Guard the wandb call: only execute it when `self.logger` has a real wandb experiment (i.e.
-`hasattr(self.logger, "experiment")` and the experiment is not a `MagicMock`). Import
-`ABCD_CONFIG_KEYS` from `dcba.dataset.transforms` and `wandb` at the top of `wrapper.py`.
+Read `config["training"]["loss"]` (name + args) in `train()`, instantiate the loss if it is not
+`mse`, and pass it to the wrapper constructor.
 
-Verify: after a training run, the wandb run page should show a `test/reconstructions` table with one
-row per test sample and 18 float columns.
+Add the `loss` key to `configs/base.yaml` with `mse` as the default, plus a commented-out example
+for `abcd_constraint`:
+
+```yaml
+training:
+  loss:
+    name: mse
+    args: {}
+  # To use the constraint-penalty loss:
+  # loss:
+  #   name: abcd_constraint
+  #   args:
+  #     lambda_penalty: 1.0
+```
+
+Verify the full pipeline end-to-end:
+
+```bash
+uv run dcba-train --config-name base
+uv run dcba-train --config-name base 'training.loss.name=abcd_constraint' \
+    'training.loss.args.lambda_penalty=1.0'
+```
+
+Both runs should complete without error and log `train_loss` / `val_loss` to wandb.
