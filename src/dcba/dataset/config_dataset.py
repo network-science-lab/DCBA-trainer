@@ -70,8 +70,8 @@ class ConfigDataset(Dataset):
 
         :param idx: Index of the config instance.
 
-        :returns: A tuple ``(tensor, tensor)`` where both elements are the same float
-            tensor of shape ``(9,)``.
+        :returns: A tuple ``(input, target)`` of independent float tensors of shape ``(9,)``, both
+            containing the same values.
         """
         t = self._tensors[idx]
-        return t, t
+        return t, t.clone()
