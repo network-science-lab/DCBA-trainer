@@ -3,12 +3,16 @@
 *.egg-info
 *.json
 !.claude/settings.json
+.claude/settings.local.json
 .claude/skills/*-workspace/
+.env
 .idea
+.wandb
 .mypy_cache
 .pytest_cache
 .ruff_cache
 .vscode
 .venv
 examples
-PLAN.md
+outputs
+# PLAN.md

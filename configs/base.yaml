@@ -1,0 +1,36 @@
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+random_seed: 42
+
+data: {} # TBD
+
+model: {} # TBD
+
+training:
+  accelerator: gpu
+  devices: [0]
+  max_epochs: 100
+  optimizer:
+    name: AdamW
+    args:
+      lr: 0.001
+      weight_decay: 0.00001
+  logger:
+    project: dcba
+    name: config-autoencoder
+    tags: [phase-1]
+  callbacks:
+    - name: model_checkpoint
+      monitor: val_loss
+      mode: min
+      save_top_k: 1
+      save_last: true
+      verbose: true
+    - name: early_stopping
+      monitor: val_loss
+      mode: min
+      patience: 20
+    - name: model_summary
+      max_depth: -1
