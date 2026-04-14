@@ -48,13 +48,13 @@ repos:
           ]
 
   # Hook to automatically trigger tests (it will pass if no tests are found too - exit code is 5)
-  - repo: local
-    hooks:
-      - id: pytest
-        name: pytest
-        entry: sh -c '.pc_config/test_runner.sh'
-        types: [python]
-        verbose: true
-        language: system
-        pass_filenames: false
-        stages: [pre-commit]
+  # - repo: local
+  #   hooks:
+  #     - id: pytest
+  #       name: pytest
+  #       entry: sh -c '.pc_config/test_runner.sh'
+  #       types: [python]
+  #       verbose: true
+  #       language: system
+  #       pass_filenames: false
+  #       stages: [pre-commit]

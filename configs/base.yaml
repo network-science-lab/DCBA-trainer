@@ -37,7 +37,7 @@ training:
       lr: 0.001
       weight_decay: 0.00001
   logger:
-    project: dcba
+    project: DCBA
     name: config-autoencoder
     tags: [phase-1]
   callbacks:

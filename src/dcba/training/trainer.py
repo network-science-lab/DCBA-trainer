@@ -73,14 +73,24 @@ def train(config: dict) -> None:
         encoder, config["training"]["optimizer"]["args"], loss_fn=loss_fn
     )
 
+    logger = get_logger(config)
+    logger.log_hyperparams({key: value for key, value in config.items() if key != "hydra"})
+    logger.watch(wrapper)
     trainer = pl.Trainer(
         max_epochs=config["training"]["max_epochs"],
         accelerator=config["training"]["accelerator"],
         devices=config["training"]["devices"],
         log_every_n_steps=1,
         callbacks=get_callbacks(config),
-        logger=get_logger(config),
+        logger=logger,
     )
     trainer.fit(wrapper, datamodule=datamodule)
     wrapper._scaler = datamodule.scaler
-    trainer.test(wrapper, datamodule=datamodule)
+    metrics = trainer.test(wrapper, datamodule=datamodule)
+    for i in Path(f"{config['hydra']['runtime']['output_dir']}/checkpoints").iterdir():
+        logger.experiment.log_artifact(
+            artifact_or_path=str(i),
+            name=i.stem.replace("=", "-"),
+            type="model",
+        )
+    logger.log_metrics(metrics[-1])

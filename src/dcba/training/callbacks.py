@@ -20,6 +20,8 @@ def get_callbacks(config: dict) -> list[Callback]:
         if name == "model_checkpoint":
             callbacks.append(
                 ModelCheckpoint(
+                    dirpath=f"{config['hydra']['runtime']['output_dir']}/checkpoints/",
+                    filename="model-{epoch}",
                     monitor=cb.get("monitor"),
                     mode=cb.get("mode", "min"),
                     save_top_k=cb.get("save_top_k", 1),

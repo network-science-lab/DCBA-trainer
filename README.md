@@ -66,6 +66,14 @@ Use Cases:
 
 # Doodles
 
+## Sweep
+
+```
+export WANDB_DIR=.wandb
+wandb sweep ./configs/base-sweep.yaml
+wandb agent NAME --count X
+```
+
 ## Data
 
 - pairs config, graph: `(q, g)`

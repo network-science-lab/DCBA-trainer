@@ -47,6 +47,7 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
     ) -> None:
         """Initialise the wrapper with the encoder, optimiser settings, and optional loss."""
         super().__init__()
+        self.save_hyperparameters(ignore=["encoder", "loss_fn"])
         self._encoder = encoder
         self._optimizer_config = optimizer_config
         self._scaler = scaler
