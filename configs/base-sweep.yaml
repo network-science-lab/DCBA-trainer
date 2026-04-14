@@ -4,6 +4,8 @@ command:
   - run
   - python
   - ${program}
+  - --config-name
+  - base
   - ${args_no_hyphens}
 project: dcba
 
