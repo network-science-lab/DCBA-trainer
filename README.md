@@ -70,8 +70,8 @@ Use Cases:
 
 ```
 export WANDB_DIR=.wandb
-wandb sweep ./configs/base-sweep.yaml
-wandb agent NAME --count X
+uv run wandb sweep ./configs/base-sweep.yaml
+uv run wandb agent NAME --count X
 ```
 
 ## Data

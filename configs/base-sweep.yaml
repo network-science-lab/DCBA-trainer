@@ -1,11 +1,11 @@
 program: src/dcba/entrypoint.py
-group: base
 command:
-  - ${env}
+  - uv
+  - run
   - python
   - ${program}
   - ${args_no_hyphens}
-project: DCBA
+project: dcba
 
 method: bayes # random
 
