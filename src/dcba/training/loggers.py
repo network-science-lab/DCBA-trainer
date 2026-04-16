@@ -27,7 +27,8 @@ def get_logger(config: dict) -> loggers.WandbLogger | DummyLogger:
             project=config["training"]["logger"]["project"],
             name=config["training"]["logger"].get("name"),
             tags=config["training"]["logger"].get("tags", []),
-            save_dir=config["hydra"]["run"]["dir"],
+            save_dir=".wandb",
+            offline=config["training"]["logger"].get("offline", False),
         )
     except Exception as exc:
         logger.warning("WandbLogger not initialised — using dummy. Reason: %s", exc)

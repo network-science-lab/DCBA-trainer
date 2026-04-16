@@ -1,0 +1,27 @@
+program: src/dcba/entrypoint.py
+command:
+  - uv
+  - run
+  - python
+  - ${program}
+  - --config-name
+  - base
+  - ${args_no_hyphens}
+project: dcba
+
+method: bayes # random
+
+metric:
+  name: val_loss
+  goal: minimize
+
+parameters:
+  model.embedding_dim:
+    values: [16, 32, 64]
+
+  model.hidden_dims:
+    values:
+      - [32]
+      - [64]
+      - [128]
+      - [64, 64]

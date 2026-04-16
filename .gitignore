@@ -11,8 +11,8 @@
 .mypy_cache
 .pytest_cache
 .ruff_cache
+.trainings
 .vscode
 .venv
 examples
-outputs
 # PLAN.md

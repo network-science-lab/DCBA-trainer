@@ -3,8 +3,9 @@
 from pathlib import Path
 
 import hydra
+import wandb
 from dotenv import load_dotenv
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 load_dotenv()  # populate os.environ from .env if present; no-op otherwise
 
@@ -20,8 +21,15 @@ def main(cfg: DictConfig) -> None:
     """
     from dcba.training.trainer import train
     from dcba.utils.config import load_config
+    from dcba.utils.misc import unflatten_dict
 
     config = load_config(cfg)
+
+    run = wandb.init()
+    sweep_cfg = unflatten_dict(dict(run.config))
+    if sweep_cfg:
+        cfg = OmegaConf.merge(cfg, OmegaConf.create(sweep_cfg))
+
     train(config)
 
 

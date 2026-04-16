@@ -66,6 +66,14 @@ Use Cases:
 
 # Doodles
 
+## Sweep
+
+```
+export WANDB_DIR=.wandb
+uv run wandb sweep ./configs/base-sweep.yaml
+uv run wandb agent NAME --count X
+```
+
 ## Data
 
 - pairs config, graph: `(q, g)`
@@ -134,7 +142,8 @@ L = InfoNCE(q, g)
 
 ## TODOs
 
-- set up wandb project
+invoke training: `uv run dcba-train --config-name base`
+
 - add the baseline estimator
 - Dlaczego nie robimy bezpośrednio konfig -> graf tylko dwa enkodery?
 - investigate available graph embedders

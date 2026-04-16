@@ -1,17 +1,36 @@
 hydra:
   run:
-    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    dir: .trainings/${now:%Y-%m-%d}/${now:%H-%M-%S}
 
 random_seed: 42
 
-data: {} # TBD
+data:
+  report_path: "abcd-interim/report.json"
+  # report_path: "test/dataset_abcd/report.json"
+  n_max: 10000 # upper bound for all node-count-dependent scaler features
+  val_ratio: 0.15
+  test_ratio: 0.15
+  batch_size: 8
+  num_workers: 0
 
-model: {} # TBD
+model:
+  input_dim: 9
+  hidden_dims: [64]
+  embedding_dim: 32
 
 training:
+  wrapper: config_autoencoder
   accelerator: gpu
   devices: [0]
   max_epochs: 100
+  loss:
+    name: mse
+    args: {}
+  # To use the constraint-penalty loss:
+  # loss:
+  #   name: abcd_constraint
+  #   args:
+  #     lambda_penalty: 1.0
   optimizer:
     name: AdamW
     args:
