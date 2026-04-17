@@ -15,4 +15,5 @@
 .vscode
 .venv
 examples
+*.log
 # PLAN.md

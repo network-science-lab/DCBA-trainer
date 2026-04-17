@@ -7,6 +7,7 @@ import torch.nn as nn
 
 from dcba.datamodule import ConfigDataModule
 from dcba.models.config_encoder import ConfigEncoder
+from dcba.models.graph_encoder import GraphEncoder
 from dcba.training.callbacks import get_callbacks
 from dcba.training.loggers import get_logger
 from dcba.training.loss import ABCDConstraintPenaltyLoss
@@ -14,6 +15,11 @@ from dcba.wrapper import ConfigAutoencoderWrapper
 
 _WRAPPERS = {
     "config_autoencoder": ConfigAutoencoderWrapper,
+}
+
+_MODELS = {
+    "ConfigEncoder": ConfigEncoder,
+    "GraphEncoder": GraphEncoder,
 }
 
 _LOSSES: dict[str, type[nn.Module]] = {
@@ -47,6 +53,13 @@ def train(config: dict) -> None:
     :param config: Full resolved training config dict (as returned by
         :func:`~dcba.utils.config.load_config`).
     """
+    model_cfg = config["model"]
+    model_name = config["training"]["model_cls"]
+    if model_name not in _MODELS:
+        raise ValueError(f"Unknown model class '{model_name}'. Available: {list(_MODELS)}")
+    model_cls = _MODELS[model_name]
+    encoder = model_cls(**model_cfg)
+
     data_cfg = config["data"]
     datamodule = ConfigDataModule(
         report_path=Path(data_cfg["report_path"]),
@@ -55,13 +68,7 @@ def train(config: dict) -> None:
         test_ratio=data_cfg["test_ratio"],
         batch_size=data_cfg["batch_size"],
         num_workers=data_cfg["num_workers"],
-    )
-
-    model_cfg = config["model"]
-    encoder = ConfigEncoder(
-        input_dim=model_cfg["input_dim"],
-        hidden_dims=list(model_cfg["hidden_dims"]),
-        embedding_dim=model_cfg["embedding_dim"],
+        unique_configs=True if model_name == "ConfigEncoder" else False,
     )
 
     loss_fn = _build_loss(config["training"]["loss"])
@@ -70,7 +77,10 @@ def train(config: dict) -> None:
     if wrapper_name not in _WRAPPERS:
         raise ValueError(f"Unknown wrapper '{wrapper_name}'. Available: {list(_WRAPPERS)}")
     wrapper = _WRAPPERS[wrapper_name](
-        encoder, config["training"]["optimizer"]["args"], loss_fn=loss_fn
+        encoder,
+        config["training"]["optimizer"]["args"],
+        loss_fn=loss_fn,
+        batch_size=data_cfg["batch_size"],
     )
 
     logger = get_logger(config)

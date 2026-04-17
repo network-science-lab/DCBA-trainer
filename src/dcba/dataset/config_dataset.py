@@ -3,8 +3,8 @@
 from pathlib import Path
 
 from dcba_data_set.graph_io import load_report
-from dcba_data_set.graph_io.data_models import ConfigRecord
-from torch import Tensor
+from dcba_data_set.graph_io.data_models import ConfigRecord, DCBAHeteroData
+from torch import Tensor, zeros
 from torch.utils.data import Dataset
 
 from dcba.dataset.transforms import ABCDConfigScaler, ABCDConfigToTensor
@@ -31,14 +31,26 @@ class ConfigDataset(Dataset):
     def __init__(
         self,
         configs: dict[str, ConfigRecord],
+        graphs: dict[str, DCBAHeteroData],
         scaler: ABCDConfigScaler | None = None,
+        unique_configs: bool = True,
     ) -> None:
         """Initialise the dataset, eagerly converting records to tensors and applying the scaler."""
         super().__init__()
         to_tensor = ABCDConfigToTensor()
+        self._graphs = []
+        _configs = []
+        for key in configs.keys():
+            if unique_configs:
+                _configs.append(configs[key])
+                self._graphs.append(graphs[key][0])  # As example
+            else:
+                _configs.extend([configs[key]] * len(graphs[key]))
+                self._graphs.extend(graphs[key])
         self._tensors: list[Tensor] = [
-            scaler(to_tensor(r)) if scaler is not None else to_tensor(r) for r in configs.values()
+            scaler(to_tensor(r)) if scaler is not None else to_tensor(r) for r in _configs
         ]
+        assert len(self._graphs) == len(self._tensors)
 
     @classmethod
     def from_report(
@@ -55,14 +67,14 @@ class ConfigDataset(Dataset):
 
         :returns: A :class:`ConfigDataset` constructed from all configs in the report.
         """
-        configs, _ = load_report(report_path)
-        return cls(configs, scaler=scaler)
+        configs, graphs = load_report(report_path)
+        return cls(configs=configs, graphs=graphs, scaler=scaler)
 
     def __len__(self) -> int:
         """Return the number of config instances in the dataset."""
         return len(self._tensors)
 
-    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
+    def __getitem__(self, idx: int) -> tuple[Tensor, DCBAHeteroData, Tensor]:
         """
         Return the config tensor at the given index as an (input, target) pair.
 
@@ -72,4 +84,6 @@ class ConfigDataset(Dataset):
             containing the same values.
         """
         t = self._tensors[idx]
-        return t, t.clone()
+        g = self._graphs[idx]
+        g["actor"].x = zeros((len(g.actors_map), 5))
+        return t, g, t.clone()

@@ -1,6 +1,7 @@
 """Config encoder module — MLP autoencoder for ABCD configuration vectors."""
 
 import torch.nn as nn
+from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from torch import Tensor
 
 
@@ -62,15 +63,17 @@ class ConfigEncoder(nn.Module):
         """
         return self._decoder(h)
 
-    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
+    def forward(self, x: tuple[Tensor, DCBAHeteroData]) -> tuple[Tensor, Tensor]:
         """
         Run the full autoencoder pass.
 
-        :param x: Float tensor of shape ``(batch, input_dim)``.
+        :param x: Tuple of a float tensor Float tensor of shape ``(batch, input_dim)``
+        and DCBAHeteroData.
 
         :returns: Tuple ``(h_q, x_hat)`` where ``h_q`` is the embedding and
             ``x_hat`` is the reconstruction.
         """
-        h_q = self.encode(x)
+        _x, _ = x
+        h_q = self.encode(_x)
         x_hat = self.decode(h_q)
         return h_q, x_hat
