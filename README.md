@@ -1,33 +1,33 @@
 # DCBA
 
-This repository contains research code addressing the problem of graph configuration retrieval, that
-is how to obtain parameters of a synthetic graph generator (e.g. ABCD) given the graph.
+This repository contains research code addressing the problem of **graph configuration retrieval**:
+given a graph, recover the parameters of the synthetic generator (ABCD/mABCD) that produced it.
 
-The problem is isnspired by evaluating what-if scenarios of complex networks which are vastly
-modelled by networks. The idea, from the other hand, stems from CLIPs (Contrastive Language-Image
-Pre-Training).
+The problem is inspired by evaluating what-if scenarios affecting global topology of complex
+networked systems. The idea draws from CLIP (Contrastive Language–Image Pre-Training).
 
 ## Idea
 
-**Given a graph `g` find a set of parameters `q` according to which it can be generated with ABCD.**
+**Given a graph `G`, find the parameter vector `θ` of the ABCD/mABCD generator that could have
+produced it.**
 
 ```
-Graph -> Trained Model -> Matching Config
+G -> Trained Model -> θ  (ABCD/mABCD parametrisation)
 ```
 
-Use Cases:
+Use cases:
 
 - Data augmentation
-- Modelling macro-level interventions on the system
+- Modelling macro-level interventions on a system
 - Data compression
 
 ## Environment setup
 
-**(A)** Clone the code into the persisting directory on your workstation, e.g., `XXX`
+**(A)** Clone the repository into a persistent directory on your workstation, e.g. `XXX`
 
 **(B)** Create container
 
-1. Install docker that supports CUDA
+1. Install Docker with CUDA support.
 
 2. Pull the image:
 
@@ -48,7 +48,7 @@ Use Cases:
        ghcr.io/anty-filidor/mlaudio:gamma-uv
    ```
 
-**(C)** Set up Python project
+**(C)** Set up the Python project
 
 1. Install `uv` dependencies:
 
@@ -62,97 +62,118 @@ Use Cases:
    uv run pre-commit install --config .pre-commit-config.yaml
    ```
 
-3. To update `pre-commit` visit [this](https://github.com/anty-filidor/template-python) repository.
+3. To update `pre-commit` hooks, refer to
+   [this template repository](https://github.com/anty-filidor/template-python).
 
-# Doodles
+## Run the code
 
-## Sweep
+Training:
 
+```bash
+uv run dcba-train --config-name base
 ```
+
+Sweep (hyperparameter tuning):
+
+```bash
 export WANDB_DIR=.wandb
 uv run wandb sweep ./configs/base-sweep.yaml
 uv run wandb agent NAME --count X
 ```
 
-## Data
+## Model architecture
 
-- pairs config, graph: `(q, g)`
-- the configurational space should not be too large
-- graphs also shouldn't be too big, but as for me no smaller than 1000 nodes
-- use diverse configuration
+### Config encoder
 
-## Architecture
+- Stacked MLP autoencoder: `θ → h_θ → θ_hat`
+- Kept as a full encoder–decoder pair — future direction: combine with a graph decoder to build a
+  graph generator conditioned on `θ`
 
-### Config Encoder
+### Graph encoder
 
-- use a simple autoencoder
-- can be a stacked MLP (?)
-
-```
-q - config
-h_q - config's emgedding
-
-q -> h_q -> q_hat
-```
-
-### Graph Encoder
-
-- take a graphformer's instance (?)
-- should be a pretrained model as these guys are big
-
-```
-g - graph
-h_g - graph's embedding
-
-g -> h_g
-```
+- GNN or Graphformer-based; ideally pretrained: `G → h_G`
 
 ## Training
 
-- aimed to align embeddings of pairs (q, g) thus make q_hat sensible given the graph
-- after training we expect that: h_q ~ h_g
+### Dataset construction
 
-### Idea A
-
-- easier than CLIP-based approaches, can be too shallow, but does not require so much data
-- joined training of both encoders
-- minimise the loss:
+Since the ABCD generator is stochastic, for each parameter vector `θ` we sample multiple graphs:
 
 ```
-L = \lambda_1 ||h_q - h_g||^2 + \lambda_2 ||q_hat - q||^2
+G_1, G_2, ..., G_n ~ p(G | θ)
 ```
 
-- intuition is that the loss is a weighted error of discrepancy between corresponding config-based
-  and graph based embeddings plus weighted error of retrieving the configuration by the autoencoder
+This lets the model learn invariance to sampling noise and is what makes multi-positive contrastive
+learning natural here (see below). Training pairs take the form `(G_i, θ)` for every sampled graph
+(i.e. we don't group by `θ` in the training loop).
 
-### Idea B
+**Train/val/test split must be performed by `θ`**, not by individual graphs. Splitting by graph
+leaks information — the model would have seen the same generator config during training and be
+evaluated on its own memorised outputs rather than on genuinely unseen configurations.
 
-- derived from CLIPs, requires large training batches (min 256)
-- contrastive learning par excellence
-- minimise the loss:
+### Pipeline overview
+
+```text
+      ┌──────────────────θ (group label)─────────────────┐
+      │                                                  │
+      v                                                  │
+┌────────────┐              ┌──────────────┐             │
+│  θ-Encoder │        G ──> │ Graph Encoder│ ──> h_G ────┤
+│   θ → h_θ  │              └──────────────┘             │
+└─────┬──────┘                              ┌────────────┴────────────┐
+      │                                     │                         │
+      v                              ┌──────┴──────┐       ┌──────────┴───────┐
+┌────────────┐                       │ SupCon Loss │       │ Regression Head  │
+│  θ-Decoder │                       │  h_G+ vs    │       │  h_G → θ_hat     │
+│ h_θ → θ_hat│                       │{h_G+, h_G-} │       │  or (μ(G), σ²(G))│
+└─────┬──────┘                       └─────────────┘       └─────────┬────────┘
+      │                                                               │
+  AE recon. loss                                               L_reg / L_NLL
+```
+
+### Losses
+
+**Stage 1** — establish the basic signal
 
 ```
-L = InfoNCE(q, g)
-
-1. compute cross-modal cosine similarity in a batch
-2. store similarities in a square matrix, with row-indices matching h_q and column-indices matching h_g and ordered by graph-config equivalence
-3. for each row try to make diagonal entry bigger than the sum of latter entries
-4. dito for columns
+L = L_reg + λ · L_SupCon
 ```
 
-## TODOs
+- `L_reg` — MSE between predicted `θ_hat` and ground-truth `θ`; keeps the regression numerically
+  grounded
+- `L_SupCon` — [Multi-Positive Supervised Contrastive Loss](https://arxiv.org/abs/2004.11362)
+  operating entirely within the graph embedding space: each `h_G` anchor is pulled towards other
+  `h_G` embeddings from the same `θ` and pushed away from those of different `θ`. The `θ` encoder
+  provides group labels only — it is not a contrastive target.
+  - negatives are **soft-weighted by parameter distance**: nearby configs are down-weighted rather
+    than treated as hard negatives, which matters because `θ` is continuous
+  - recommended batch: K≥32 configs × N graphs per config, e.g. 32×8=256 — contrastive losses
+    require enough negatives to work well; K=16 is insufficient
 
-invoke training: `uv run dcba-train --config-name config-autoencoder`
+**Stage 2** — add uncertainty awareness
 
-- add the baseline estimator
-- Dlaczego nie robimy bezpośrednio konfig -> graf tylko dwa enkodery?
-- investigate available graph embedders
+```
+L = L_NLL + λ · L_SupCon
+```
 
-1. Training pipeline (Mateusz)
-2. Auto encoder for configuration (Michal)
-3. Continuous training (Łukasz)
+Replace the regression head with a probabilistic one that predicts `(μ(G), σ²(G))` per parameter.
+The [Gaussian NLL loss](https://pytorch.org/docs/stable/generated/torch.nn.GaussianNLLLoss.html)
 
-# Links
+```
+L_NLL = (θ - μ)² / σ²  +  log σ²
+```
 
-https://github.com/openai/CLIP -> trained OpenAI's CLIP
-https://github.com/mlfoundations/open_clip?tab=readme-ov-file -> open implementation of CLIP
+forces the model to be honest about confidence: the `log σ²` term prevents it from inflating
+variance to artificially suppress the prediction error. The predicted `σ²` captures **aleatoric
+uncertainty** — the inherent ambiguity of the inverse problem.
+
+**Stage 3** _(future)_
+
+- keep dropout active at inference time and run K forward passes to estimate variance of `μ(G)`;
+  this is a proxy for **epistemic uncertainty** — parameter regions the model has not seen enough of
+- use these signals to drive adaptive generation of new training graphs in under-covered regions
+
+## Links
+
+- https://github.com/openai/CLIP — trained OpenAI CLIP
+- https://github.com/mlfoundations/open_clip — open implementation of CLIP
