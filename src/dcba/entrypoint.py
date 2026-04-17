@@ -25,7 +25,11 @@ def main(cfg: DictConfig) -> None:
 
     config = load_config(cfg)
 
-    run = wandb.init()
+    run = wandb.init(
+        project=config["training"]["logger"]["project"],
+        name=config["training"]["logger"].get("name"),
+        tags=config["training"]["logger"].get("tags", []),
+    )
     sweep_cfg = unflatten_dict(dict(run.config))
     if sweep_cfg:
         cfg = OmegaConf.merge(cfg, OmegaConf.create(sweep_cfg))
