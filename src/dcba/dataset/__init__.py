@@ -1,6 +1,6 @@
 """Dataset classes and transforms for DCBA."""
 
-from dcba.dataset.config_dataset import ConfigDataset
+from dcba.dataset.dcba_dataset import ABCDDataset
 from dcba.dataset.transforms import (
     ABCD_CONFIG_KEYS,
     ABCD_INT_FEATURE_INDICES,
@@ -10,7 +10,7 @@ from dcba.dataset.transforms import (
 )
 
 __all__ = [
-    "ConfigDataset",
+    "ABCDDataset",
     "ABCDConfigToTensor",
     "ABCDConfigScaler",
     "ABCD_CONFIG_KEYS",

@@ -49,12 +49,12 @@ class GraphEncoder(nn.Module):
         for i in range(len(enc_dims) - 1):
             mlp = nn.Sequential(
                 nn.Linear(enc_dims[i], enc_dims[i + 1]),
-                nn.ReLU(inplace=True),
+                nn.ReLU(),
                 nn.Linear(enc_dims[i + 1], enc_dims[i + 1]),
             )
             layers.append((GINConv(nn=mlp, train_eps=True), "x, edge_index -> x"))
             if i < len(enc_dims) - 2:
-                layers.append(nn.ReLU(inplace=True))
+                layers.append(nn.ReLU())
 
         self._encoder = Sequential("x, edge_index", layers)
         self._dropout = nn.Dropout(dropout)
@@ -85,7 +85,7 @@ class GraphEncoder(nn.Module):
 
         agg = self._aggregator(y_relations)
 
-        return global_mean_pool(agg, batch=None)
+        return global_mean_pool(agg, batch=data["actor"].batch)
 
     def decode(self, h: Tensor) -> Tensor:
         """

@@ -142,7 +142,7 @@ L = InfoNCE(q, g)
 
 ## TODOs
 
-invoke training: `uv run dcba-train --config-name base`
+invoke training: `uv run dcba-train --config-name config-autoencoder`
 
 - add the baseline estimator
 - Dlaczego nie robimy bezpośrednio konfig -> graf tylko dwa enkodery?

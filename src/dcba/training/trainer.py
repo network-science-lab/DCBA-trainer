@@ -5,16 +5,16 @@ from pathlib import Path
 import lightning.pytorch as pl
 import torch.nn as nn
 
-from dcba.datamodule import ConfigDataModule
+from dcba.datamodule import ABCDDataModule
 from dcba.models.config_encoder import ConfigEncoder
 from dcba.models.graph_encoder import GraphEncoder
 from dcba.training.callbacks import get_callbacks
 from dcba.training.loggers import get_logger
 from dcba.training.loss import ABCDConstraintPenaltyLoss
-from dcba.wrapper import ConfigAutoencoderWrapper
+from dcba.wrapper import DCBAAutoencoderWrapper
 
 _WRAPPERS = {
-    "config_autoencoder": ConfigAutoencoderWrapper,
+    "config_autoencoder": DCBAAutoencoderWrapper,
 }
 
 _MODELS = {
@@ -53,6 +53,8 @@ def train(config: dict) -> None:
     :param config: Full resolved training config dict (as returned by
         :func:`~dcba.utils.config.load_config`).
     """
+    logger = get_logger(config)
+
     model_cfg = config["model"]
     model_name = config["training"]["model_cls"]
     if model_name not in _MODELS:
@@ -61,7 +63,7 @@ def train(config: dict) -> None:
     encoder = model_cls(**model_cfg)
 
     data_cfg = config["data"]
-    datamodule = ConfigDataModule(
+    datamodule = ABCDDataModule(
         report_path=Path(data_cfg["report_path"]),
         n_max=data_cfg["n_max"],
         val_ratio=data_cfg["val_ratio"],
@@ -80,10 +82,8 @@ def train(config: dict) -> None:
         encoder,
         config["training"]["optimizer"]["args"],
         loss_fn=loss_fn,
-        batch_size=data_cfg["batch_size"],
     )
 
-    logger = get_logger(config)
     logger.log_hyperparams({key: value for key, value in config.items() if key != "hydra"})
     logger.watch(wrapper)
     trainer = pl.Trainer(

@@ -21,7 +21,7 @@ from dcba.dataset import ABCDConfigScaler
 from dcba.dataset.transforms import ABCD_CONFIG_KEYS
 
 
-class ConfigAutoencoderWrapper(pl.LightningModule):
+class DCBAAutoencoderWrapper(pl.LightningModule):
     """
     LightningModule for Phase 1: trains the config autoencoder in isolation.
 
@@ -29,7 +29,8 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
     output.  Logs ``{stage}_loss`` at every step.  During testing, accumulates
     per-sample reconstruction rows and logs them as a wandb Table.
 
-    :param encoder: The :class:`~dcba.models.config_encoder.ConfigEncoder` to train.
+    :param encoder: The :class: `nn.Module` to train. In practice it will be
+        `~dcba.models.config_encoder.ConfigEncoder` or `~dcba.models.graph_encoder.GraphEncoder`
     :param optimizer_config: AdamW hyperparameters dict, expected keys ``lr`` and
         ``weight_decay``.
     :param scaler: Optional scaler used to inverse-transform normalised tensors back
@@ -42,7 +43,6 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
         self,
         encoder: nn.Module,
         optimizer_config: dict,
-        batch_size: int,
         scaler: ABCDConfigScaler | None = None,
         loss_fn: nn.Module | None = None,
     ) -> None:
@@ -52,7 +52,6 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
         self._encoder = encoder
         self._optimizer_config = optimizer_config
         self._scaler = scaler
-        self._batch_size = batch_size
         self._loss_fn = loss_fn if loss_fn is not None else nn.MSELoss()
         self._test_rows: list[tuple[list[float], list[float]]] = []
 
@@ -60,22 +59,27 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
         """
         Run the encoder forward pass.
 
-        :param x: Input config tensor of shape ``(batch, input_dim)``.
+        :param x: Input graph DCBAHeteroData & config tensor of shape ``(batch, input_dim)``.
 
         :returns: Tuple ``(h_q, x_hat)``.
         """
         return self._encoder(x)
 
-    def _step(self, batch: tuple[tuple[Tensor, DCBAHeteroData], Tensor], stage: str) -> Tensor:
-        config, graph, target = batch
+    def _unpack_batch(self, batch: DCBAHeteroData) -> tuple[Tensor, DCBAHeteroData, Tensor]:
+        config = batch["actor"].config.reshape(batch.batch_size, -1)
+        target = batch["actor"].y.reshape(batch.batch_size, -1)
+        return config, batch, target
+
+    def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
+        config, graph, target = self._unpack_batch(batch)
         _, x_hat = self._encoder((config, graph))
         loss = self._loss_fn(x_hat, target)
-        self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=self._batch_size)
+        self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=graph.batch_size)
         return loss
 
     def training_step(
         self,
-        batch: tuple[tuple[Tensor, DCBAHeteroData], Tensor],
+        batch: DCBAHeteroData,
         batch_idx: int,
     ) -> Tensor:
         """Compute and log training loss."""
@@ -83,7 +87,7 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
 
     def validation_step(
         self,
-        batch: tuple[tuple[Tensor, DCBAHeteroData], Tensor],
+        batch: DCBAHeteroData,
         batch_idx: int,
     ) -> None:
         """Compute and log validation loss."""
@@ -95,13 +99,13 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
 
     def test_step(
         self,
-        batch: tuple[tuple[Tensor, DCBAHeteroData], Tensor],
+        batch: DCBAHeteroData,
         batch_idx: int,
     ) -> None:
         """Compute and log test loss; accumulate per-sample reconstruction rows."""
         self._step(batch, "test")
 
-        config, graph, _ = batch
+        config, graph, _ = self._unpack_batch(batch)
         with torch.no_grad():
             _, x_hat = self._encoder((config, graph))
 
@@ -112,7 +116,7 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
             x_cpu = self._scaler.inverse_transform(x_cpu)
             x_hat_cpu = self._scaler.inverse_transform(x_hat_cpu)
 
-        for orig, recon in zip(x_cpu.tolist(), x_hat_cpu.tolist()):
+        for orig, recon in zip(x_cpu.tolist(), x_hat_cpu.tolist(), strict=True):
             self._test_rows.append((cast(list[float], orig), cast(list[float], recon)))
 
     def on_test_epoch_end(self) -> None:

@@ -10,12 +10,12 @@ from torch.utils.data import Dataset
 from dcba.dataset.transforms import ABCDConfigScaler, ABCDConfigToTensor
 
 
-class ConfigDataset(Dataset):
+class ABCDDataset(Dataset):
     """
-    Dataset of configuration tensors for autoencoder training.
+    Dataset of configuration tensors & Graphs for autoencoders training.
 
-    Each item is a ``(tensor, tensor)`` pair where both elements are identical —
-    the input and reconstruction target for the autoencoder.
+    Each item is a ``DCBAHeteroData`` containing ABCD configuration and generated from it
+    graph — the input and reconstruction target for the autoencoder.
 
     Config records are converted to tensors via
     :class:`~dcba.dataset.transforms.ABCDConfigToTensor`.  An optional
@@ -43,7 +43,10 @@ class ConfigDataset(Dataset):
         for key in configs.keys():
             if unique_configs:
                 _configs.append(configs[key])
-                self._graphs.append(graphs[key][0])  # As example
+                # Single graph for config_autoencoder to keep consistency of the data flow
+                # architecture. This model will remove this object because it is unnecessary
+                # for its training
+                self._graphs.append(graphs[key][0])
             else:
                 _configs.extend([configs[key]] * len(graphs[key]))
                 self._graphs.extend(graphs[key])
@@ -57,7 +60,7 @@ class ConfigDataset(Dataset):
         cls,
         report_path: Path,
         scaler: ABCDConfigScaler | None = None,
-    ) -> "ConfigDataset":
+    ) -> "ABCDDataset":
         """
         Build a dataset by loading a report.json manifest.
 
@@ -74,16 +77,22 @@ class ConfigDataset(Dataset):
         """Return the number of config instances in the dataset."""
         return len(self._tensors)
 
-    def __getitem__(self, idx: int) -> tuple[Tensor, DCBAHeteroData, Tensor]:
+    def __getitem__(self, idx: int) -> DCBAHeteroData:
         """
         Return the config tensor at the given index as an (input, target) pair.
 
         :param idx: Index of the config instance.
 
-        :returns: A tuple ``(input, target)`` of independent float tensors of shape ``(9,)``, both
-            containing the same values.
+        :returns: A DCBAHeteroData with config of independent float tensors of shape ``(9,)``.
         """
         t = self._tensors[idx]
-        g = self._graphs[idx]
+        g = self._graphs[idx].clone()
+        # TODO: store data paths and load them here
+        # TODO: move it to DCBAHeteroData.from_abcd_files / from_mabcd_files
+        # TODO: __inc__ & __cat_dim__ for custom attributes
         g["actor"].x = zeros((len(g.actors_map), 5))
-        return t, g, t.clone()
+        g["actor"].config = t
+        g["actor"].y = t.clone()
+        g.actors_map = None
+        g.layers_map = None
+        return g

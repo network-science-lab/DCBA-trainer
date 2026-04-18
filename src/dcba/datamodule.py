@@ -6,17 +6,16 @@ import lightning.pytorch as pl
 from dcba_data_set.graph_io import load_report
 from torch_geometric.loader import DataLoader
 
-from dcba.dataset import ABCDConfigScaler, ConfigDataset
+from dcba.dataset import ABCDConfigScaler, ABCDDataset
 
 
-class ConfigDataModule(pl.LightningDataModule):
+class ABCDDataModule(pl.LightningDataModule):
     """
     LightningDataModule that loads an ABCD report and splits it into train/val/test sets.
 
-    Handles config-only data (no graphs).  Splitting is performed on ``instance_id`` keys
-    to prevent data leakage between splits.  A :class:`~dcba.dataset.ABCDConfigScaler` is
-    built during :meth:`setup` and stored as :attr:`scaler` so the training wrapper can
-    retrieve it for inference.
+    Splitting is performed on ``instance_id`` keys to prevent data leakage between splits.
+    A :class:`~dcba.dataset.ABCDConfigScaler` is built during :meth:`setup` and stored as
+    :attr:`scaler` so the training wrapper can retrieve it for inference.
 
     :param report_path: Path to the ``report.json`` manifest.
     :param n_max: Maximum graph size in the dataset.  Controls the upper bound of all
@@ -48,9 +47,9 @@ class ConfigDataModule(pl.LightningDataModule):
         self._num_workers = num_workers
         self._unique_configs = unique_configs
 
-        self._train_dataset: ConfigDataset | None = None
-        self._val_dataset: ConfigDataset | None = None
-        self._test_dataset: ConfigDataset | None = None
+        self._train_dataset: ABCDDataset | None = None
+        self._val_dataset: ABCDDataset | None = None
+        self._test_dataset: ABCDDataset | None = None
         self.scaler: ABCDConfigScaler | None = None
 
     def setup(self, stage: str | None = None) -> None:
@@ -80,19 +79,19 @@ class ConfigDataModule(pl.LightningDataModule):
 
         self.scaler = ABCDConfigScaler(n_max=self._n_max)
 
-        self._train_dataset = ConfigDataset(
+        self._train_dataset = ABCDDataset(
             configs={k: configs[k] for k in train_ids},
             graphs={k: [graph for graph in graphs if graph["instance_id"] == k] for k in train_ids},
             scaler=self.scaler,
             unique_configs=self._unique_configs,
         )
-        self._val_dataset = ConfigDataset(
+        self._val_dataset = ABCDDataset(
             configs={k: configs[k] for k in val_ids},
             graphs={k: [graph for graph in graphs if graph["instance_id"] == k] for k in val_ids},
             scaler=self.scaler,
             unique_configs=self._unique_configs,
         )
-        self._test_dataset = ConfigDataset(
+        self._test_dataset = ABCDDataset(
             configs={k: configs[k] for k in test_ids},
             graphs={k: [graph for graph in graphs if graph["instance_id"] == k] for k in test_ids},
             scaler=self.scaler,
