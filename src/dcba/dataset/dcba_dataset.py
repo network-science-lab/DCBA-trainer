@@ -91,8 +91,8 @@ class ABCDDataset(Dataset):
         # TODO: move it to DCBAHeteroData.from_abcd_files / from_mabcd_files
         # TODO: __inc__ & __cat_dim__ for custom attributes
         g["actor"].x = zeros((len(g.actors_map), 5))
-        g["actor"].config = t
-        g["actor"].y = t.clone()
+        g.config = t
+        g.y = t.clone()
         g.actors_map = None
         g.layers_map = None
         return g

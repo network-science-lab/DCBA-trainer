@@ -66,8 +66,8 @@ class DCBAAutoencoderWrapper(pl.LightningModule):
         return self._encoder(x)
 
     def _unpack_batch(self, batch: DCBAHeteroData) -> tuple[Tensor, DCBAHeteroData, Tensor]:
-        config = batch["actor"].config.reshape(batch.batch_size, -1)
-        target = batch["actor"].y.reshape(batch.batch_size, -1)
+        config = batch.config.reshape(batch.batch_size, -1)
+        target = batch.y.reshape(batch.batch_size, -1)
         return config, batch, target
 
     def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
