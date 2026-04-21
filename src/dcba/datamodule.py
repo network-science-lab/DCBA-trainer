@@ -1,5 +1,6 @@
 """PyTorch Lightning DataModule for DCBA config autoencoder training."""
 
+import random
 from pathlib import Path
 
 import lightning.pytorch as pl
@@ -25,6 +26,10 @@ class ABCDDataModule(pl.LightningDataModule):
     :param test_ratio: Fraction of instances to use for testing.
     :param batch_size: Number of samples per dataloader batch.
     :param num_workers: Number of worker processes for the dataloaders.
+    :param single_replica_per_instance: When ``True``, only the first replica per instance is
+        used.  When ``False``, all replicas are included.
+    :param seed: RNG seed used to shuffle instances before splitting.  Fixes the train/val/test
+        assignment across runs.
     """
 
     def __init__(
@@ -35,7 +40,8 @@ class ABCDDataModule(pl.LightningDataModule):
         test_ratio: float = 0.1,
         batch_size: int = 32,
         num_workers: int = 0,
-        unique_configs: bool = True,
+        single_replica_per_instance: bool = True,
+        seed: int = 42,
     ) -> None:
         """Initialise the data module with dataset path and split/loader parameters."""
         super().__init__()
@@ -45,7 +51,8 @@ class ABCDDataModule(pl.LightningDataModule):
         self._test_ratio = test_ratio
         self._batch_size = batch_size
         self._num_workers = num_workers
-        self._unique_configs = unique_configs
+        self._single_replica_per_instance = single_replica_per_instance
+        self._seed = seed
 
         self._train_dataset: ABCDDataset | None = None
         self._val_dataset: ABCDDataset | None = None
@@ -59,8 +66,9 @@ class ABCDDataModule(pl.LightningDataModule):
         :param stage: Lightning stage identifier (``"fit"``, ``"test"``, etc.).
             Unused here — all splits are always prepared.
         """
-        configs, graphs = load_report(self._report_path)
-        instance_ids = list(configs.keys())
+        records = load_report(self._report_path)
+        random.Random(self._seed).shuffle(records)
+        instance_ids = [r.instance_id for r in records]
         n = len(instance_ids)
 
         n_test = max(1, int(n * self._test_ratio))
@@ -80,22 +88,19 @@ class ABCDDataModule(pl.LightningDataModule):
         self.scaler = ABCDConfigScaler(n_max=self._n_max)
 
         self._train_dataset = ABCDDataset(
-            configs={k: configs[k] for k in train_ids},
-            graphs={k: [graph for graph in graphs if graph["instance_id"] == k] for k in train_ids},
+            records=[r for r in records if r.instance_id in train_ids],
             scaler=self.scaler,
-            unique_configs=self._unique_configs,
+            single_replica_per_instance=self._single_replica_per_instance,
         )
         self._val_dataset = ABCDDataset(
-            configs={k: configs[k] for k in val_ids},
-            graphs={k: [graph for graph in graphs if graph["instance_id"] == k] for k in val_ids},
+            records=[r for r in records if r.instance_id in val_ids],
             scaler=self.scaler,
-            unique_configs=self._unique_configs,
+            single_replica_per_instance=self._single_replica_per_instance,
         )
         self._test_dataset = ABCDDataset(
-            configs={k: configs[k] for k in test_ids},
-            graphs={k: [graph for graph in graphs if graph["instance_id"] == k] for k in test_ids},
+            records=[r for r in records if r.instance_id in test_ids],
             scaler=self.scaler,
-            unique_configs=self._unique_configs,
+            single_replica_per_instance=self._single_replica_per_instance,
         )
 
     def train_dataloader(self) -> DataLoader:

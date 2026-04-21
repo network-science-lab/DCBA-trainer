@@ -21,12 +21,12 @@ class TestTestDatasetLoading:
             "Set DCBA_DATA_ROOT to the dcba-data-set data directory."
         )
 
-    def test_load_returns_nonempty_configs(self, report_path) -> None:
-        """load_report returns at least one config entry."""
-        configs, _ = load_report(report_path)
-        assert len(configs) > 0
+    def test_load_returns_nonempty_records(self, report_path) -> None:
+        """load_report returns at least one InstanceRecord."""
+        records = load_report(report_path)
+        assert len(records) > 0
 
-    def test_load_returns_nonempty_graphs(self, report_path) -> None:
-        """load_report returns at least one graph."""
-        _, graphs = load_report(report_path)
-        assert len(graphs) > 0
+    def test_load_records_have_replicas(self, report_path) -> None:
+        """Each InstanceRecord contains at least one replica."""
+        records = load_report(report_path)
+        assert any(len(r.replicas) > 0 for r in records)
