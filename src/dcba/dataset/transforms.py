@@ -3,7 +3,7 @@
 from functools import lru_cache
 
 import torch
-from dcba_data_set.graph_io.data_models import ConfigRecord
+from dcba_data_set.graph_io.data_models import DCBAInstanceConfig
 from torch import Tensor
 from torch_geometric.transforms import BaseTransform
 
@@ -98,13 +98,13 @@ class ABCDConfigScaler:
 
 class ABCDConfigToTensor(BaseTransform):
     """
-    Transform an ABCD :class:`~dcba_data_set.graph_io.data_models.ConfigRecord` to a float tensor.
+    Transform a :class:`~dcba_data_set.graph_io.data_models.DCBAInstanceConfig` to a float tensor.
 
     Extracts the 9 numerical ABCD config fields in the order defined by
     :data:`ABCD_CONFIG_KEYS` and returns a 1-D ``float32`` tensor of shape ``(9,)``.
     """
 
-    def forward(self, data: ConfigRecord) -> Tensor:
+    def forward(self, data: DCBAInstanceConfig) -> Tensor:
         """
         Apply the transform.
 
