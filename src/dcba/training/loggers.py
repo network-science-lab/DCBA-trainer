@@ -41,6 +41,7 @@ def get_logger(config: dict) -> loggers.WandbLogger | DummyLogger:
             config = OmegaConf.merge(config, OmegaConf.create(sweep_cfg))
 
         return loggers.WandbLogger(
+            experiment=run,
             project=config["training"]["logger"]["project"],
             name=config["training"]["logger"].get("name"),
             tags=config["training"]["logger"].get("tags", []),
