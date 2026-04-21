@@ -4,19 +4,18 @@ from pathlib import Path
 
 import lightning.pytorch as pl
 from dcba_data_set.graph_io import load_report
-from torch.utils.data import DataLoader
+from torch_geometric.loader import DataLoader
 
-from dcba.dataset import ABCDConfigScaler, ConfigDataset
+from dcba.dataset import ABCDConfigScaler, ABCDDataset
 
 
-class ConfigDataModule(pl.LightningDataModule):
+class ABCDDataModule(pl.LightningDataModule):
     """
     LightningDataModule that loads an ABCD report and splits it into train/val/test sets.
 
-    Handles config-only data (no graphs).  Splitting is performed on ``instance_id`` keys
-    to prevent data leakage between splits.  A :class:`~dcba.dataset.ABCDConfigScaler` is
-    built during :meth:`setup` and stored as :attr:`scaler` so the training wrapper can
-    retrieve it for inference.
+    Splitting is performed on ``instance_id`` keys to prevent data leakage between splits.
+    A :class:`~dcba.dataset.ABCDConfigScaler` is built during :meth:`setup` and stored as
+    :attr:`scaler` so the training wrapper can retrieve it for inference.
 
     :param report_path: Path to the ``report.json`` manifest.
     :param n_max: Maximum graph size in the dataset.  Controls the upper bound of all
@@ -36,6 +35,7 @@ class ConfigDataModule(pl.LightningDataModule):
         test_ratio: float = 0.1,
         batch_size: int = 32,
         num_workers: int = 0,
+        unique_configs: bool = True,
     ) -> None:
         """Initialise the data module with dataset path and split/loader parameters."""
         super().__init__()
@@ -45,10 +45,11 @@ class ConfigDataModule(pl.LightningDataModule):
         self._test_ratio = test_ratio
         self._batch_size = batch_size
         self._num_workers = num_workers
+        self._unique_configs = unique_configs
 
-        self._train_dataset: ConfigDataset | None = None
-        self._val_dataset: ConfigDataset | None = None
-        self._test_dataset: ConfigDataset | None = None
+        self._train_dataset: ABCDDataset | None = None
+        self._val_dataset: ABCDDataset | None = None
+        self._test_dataset: ABCDDataset | None = None
         self.scaler: ABCDConfigScaler | None = None
 
     def setup(self, stage: str | None = None) -> None:
@@ -58,7 +59,7 @@ class ConfigDataModule(pl.LightningDataModule):
         :param stage: Lightning stage identifier (``"fit"``, ``"test"``, etc.).
             Unused here — all splits are always prepared.
         """
-        configs, _ = load_report(self._report_path)
+        configs, graphs = load_report(self._report_path)
         instance_ids = list(configs.keys())
         n = len(instance_ids)
 
@@ -78,9 +79,24 @@ class ConfigDataModule(pl.LightningDataModule):
 
         self.scaler = ABCDConfigScaler(n_max=self._n_max)
 
-        self._train_dataset = ConfigDataset({k: configs[k] for k in train_ids}, scaler=self.scaler)
-        self._val_dataset = ConfigDataset({k: configs[k] for k in val_ids}, scaler=self.scaler)
-        self._test_dataset = ConfigDataset({k: configs[k] for k in test_ids}, scaler=self.scaler)
+        self._train_dataset = ABCDDataset(
+            configs={k: configs[k] for k in train_ids},
+            graphs={k: [graph for graph in graphs if graph["instance_id"] == k] for k in train_ids},
+            scaler=self.scaler,
+            unique_configs=self._unique_configs,
+        )
+        self._val_dataset = ABCDDataset(
+            configs={k: configs[k] for k in val_ids},
+            graphs={k: [graph for graph in graphs if graph["instance_id"] == k] for k in val_ids},
+            scaler=self.scaler,
+            unique_configs=self._unique_configs,
+        )
+        self._test_dataset = ABCDDataset(
+            configs={k: configs[k] for k in test_ids},
+            graphs={k: [graph for graph in graphs if graph["instance_id"] == k] for k in test_ids},
+            scaler=self.scaler,
+            unique_configs=self._unique_configs,
+        )
 
     def train_dataloader(self) -> DataLoader:
         """Return the training DataLoader."""

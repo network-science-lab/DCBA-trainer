@@ -1,6 +1,12 @@
 """Lightning callback factory."""
 
-from lightning.pytorch.callbacks import Callback, EarlyStopping, ModelCheckpoint, ModelSummary
+from lightning.pytorch.callbacks import (
+    Callback,
+    EarlyStopping,
+    GradientAccumulationScheduler,
+    ModelCheckpoint,
+    ModelSummary,
+)
 
 
 def get_callbacks(config: dict) -> list[Callback]:
@@ -37,6 +43,12 @@ def get_callbacks(config: dict) -> list[Callback]:
                     patience=cb.get("patience", 10),
                 )
             )
+        elif name == "gradient_accumulation_scheduler":
+            gradient_scheduling = cb["gradient_scheduling"]
+            scheduling = (
+                gradient_scheduling if gradient_scheduling is dict else {0: gradient_scheduling}
+            )
+            callbacks.append(GradientAccumulationScheduler(scheduling=scheduling))
         elif name == "model_summary":
             callbacks.append(ModelSummary(max_depth=cb.get("max_depth", -1)))
     return callbacks

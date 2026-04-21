@@ -13,15 +13,15 @@ import lightning.pytorch as pl
 import torch
 import torch.nn as nn
 import wandb
+from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from lightning.pytorch.loggers import WandbLogger
 from torch import Tensor
 
 from dcba.dataset import ABCDConfigScaler
 from dcba.dataset.transforms import ABCD_CONFIG_KEYS
-from dcba.models.config_encoder import ConfigEncoder
 
 
-class ConfigAutoencoderWrapper(pl.LightningModule):
+class DCBAAutoencoderWrapper(pl.LightningModule):
     """
     LightningModule for Phase 1: trains the config autoencoder in isolation.
 
@@ -29,7 +29,8 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
     output.  Logs ``{stage}_loss`` at every step.  During testing, accumulates
     per-sample reconstruction rows and logs them as a wandb Table.
 
-    :param encoder: The :class:`~dcba.models.config_encoder.ConfigEncoder` to train.
+    :param encoder: The :class: `nn.Module` to train. In practice it will be
+        `~dcba.models.config_encoder.ConfigEncoder` or `~dcba.models.graph_encoder.GraphEncoder`
     :param optimizer_config: AdamW hyperparameters dict, expected keys ``lr`` and
         ``weight_decay``.
     :param scaler: Optional scaler used to inverse-transform normalised tensors back
@@ -40,7 +41,7 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
 
     def __init__(
         self,
-        encoder: ConfigEncoder,
+        encoder: nn.Module,
         optimizer_config: dict,
         scaler: ABCDConfigScaler | None = None,
         loss_fn: nn.Module | None = None,
@@ -54,28 +55,41 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
         self._loss_fn = loss_fn if loss_fn is not None else nn.MSELoss()
         self._test_rows: list[tuple[list[float], list[float]]] = []
 
-    def forward(self, x: Tensor) -> tuple[Tensor, Tensor]:
+    def forward(self, x: tuple[Tensor, DCBAHeteroData]) -> tuple[Tensor, Tensor]:
         """
         Run the encoder forward pass.
 
-        :param x: Input config tensor of shape ``(batch, input_dim)``.
+        :param x: Input graph DCBAHeteroData & config tensor of shape ``(batch, input_dim)``.
 
         :returns: Tuple ``(h_q, x_hat)``.
         """
         return self._encoder(x)
 
-    def _step(self, batch: tuple[Tensor, Tensor], stage: str) -> Tensor:
-        x, target = batch
-        _, x_hat = self._encoder(x)
+    def _unpack_batch(self, batch: DCBAHeteroData) -> tuple[Tensor, DCBAHeteroData, Tensor]:
+        config = batch.config.reshape(batch.batch_size, -1)
+        target = batch.y.reshape(batch.batch_size, -1)
+        return config, batch, target
+
+    def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
+        config, graph, target = self._unpack_batch(batch)
+        _, x_hat = self._encoder((config, graph))
         loss = self._loss_fn(x_hat, target)
-        self.log(f"{stage}_loss", loss, prog_bar=True)
+        self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=graph.batch_size)
         return loss
 
-    def training_step(self, batch: tuple[Tensor, Tensor], batch_idx: int) -> Tensor:
+    def training_step(
+        self,
+        batch: DCBAHeteroData,
+        batch_idx: int,
+    ) -> Tensor:
         """Compute and log training loss."""
         return self._step(batch, "train")
 
-    def validation_step(self, batch: tuple[Tensor, Tensor], batch_idx: int) -> None:
+    def validation_step(
+        self,
+        batch: DCBAHeteroData,
+        batch_idx: int,
+    ) -> None:
         """Compute and log validation loss."""
         self._step(batch, "val")
 
@@ -83,22 +97,26 @@ class ConfigAutoencoderWrapper(pl.LightningModule):
         """Reset the per-sample reconstruction accumulator."""
         self._test_rows = []
 
-    def test_step(self, batch: tuple[Tensor, Tensor], batch_idx: int) -> None:
+    def test_step(
+        self,
+        batch: DCBAHeteroData,
+        batch_idx: int,
+    ) -> None:
         """Compute and log test loss; accumulate per-sample reconstruction rows."""
         self._step(batch, "test")
 
-        x, _ = batch
+        config, graph, _ = self._unpack_batch(batch)
         with torch.no_grad():
-            _, x_hat = self._encoder(x)
+            _, x_hat = self._encoder((config, graph))
 
-        x_cpu = x.detach().cpu()
+        x_cpu = config.detach().cpu()
         x_hat_cpu = x_hat.detach().cpu()
 
         if self._scaler is not None:
             x_cpu = self._scaler.inverse_transform(x_cpu)
             x_hat_cpu = self._scaler.inverse_transform(x_hat_cpu)
 
-        for orig, recon in zip(x_cpu.tolist(), x_hat_cpu.tolist()):
+        for orig, recon in zip(x_cpu.tolist(), x_hat_cpu.tolist(), strict=True):
             self._test_rows.append((cast(list[float], orig), cast(list[float], recon)))
 
     def on_test_epoch_end(self) -> None:

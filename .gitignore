@@ -2,6 +2,7 @@
 **/.DS_Store
 *.egg-info
 *.json
+*.log
 !.claude/settings.json
 .claude/settings.local.json
 .claude/skills/*-workspace/

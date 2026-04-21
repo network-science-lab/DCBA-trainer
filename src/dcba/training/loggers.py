@@ -3,7 +3,11 @@
 import logging
 from unittest.mock import MagicMock
 
+import wandb
 from lightning.pytorch import loggers
+from omegaconf import OmegaConf
+
+from dcba.utils.misc import unflatten_dict
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +27,19 @@ def get_logger(config: dict) -> loggers.WandbLogger | DummyLogger:
         otherwise a :class:`DummyLogger` that silently absorbs all calls.
     """
     try:
+        run = (
+            wandb.init(
+                project=config["training"]["logger"]["project"],
+                name=config["training"]["logger"].get("name"),
+                tags=config["training"]["logger"].get("tags", []),
+            )
+            if wandb.run is None
+            else wandb.run
+        )
+        sweep_cfg = unflatten_dict(dict(run.config))
+        if sweep_cfg:
+            config = OmegaConf.merge(config, OmegaConf.create(sweep_cfg))
+
         return loggers.WandbLogger(
             project=config["training"]["logger"]["project"],
             name=config["training"]["logger"].get("name"),
