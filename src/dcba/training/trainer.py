@@ -70,7 +70,8 @@ def train(config: dict) -> None:
         test_ratio=data_cfg["test_ratio"],
         batch_size=data_cfg["batch_size"],
         num_workers=data_cfg["num_workers"],
-        unique_configs=True if model_name == "ConfigEncoder" else False,
+        single_replica_per_instance=True if model_name == "ConfigEncoder" else False,
+        seed=config.get("random_seed", 42),
     )
 
     loss_fn = _build_loss(config["training"]["loss"])
