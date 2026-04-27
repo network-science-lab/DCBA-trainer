@@ -1,16 +1,164 @@
 """Loss functions for DCBA training."""
 
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
 
-class IdeaALoss(nn.Module):
-    """Weighted sum of embedding discrepancy and autoencoder reconstruction loss."""
+class MultiPositiveSupConLoss(nn.Module):
+    """
+    Cross-modal Multi-Positive Supervised Contrastive Loss with soft-weighted negatives.
 
-    def forward(self, *args, **kwargs):
-        """Forward pass."""
-        raise NotImplementedError
+    Graph embeddings ``h_G`` act as anchors.  For anchor ``i`` the positive set contains the
+    matching config embedding ``h_θ_i`` (cross-modal) and all other graph embeddings ``h_G_j``
+    that share the same ``instance_id`` label (same-modal).  All embeddings from instances with
+    a different label are negatives, down-weighted by their distance in parameter space so that
+    nearby configs are not treated as hard negatives.
+
+    Both ``graph_embeddings`` and ``config_embeddings`` must have the same ``embedding_dim``.
+
+    The loss is averaged over all ``(anchor, positive)`` pairs — anchors with more in-batch
+    positives contribute proportionally more signal, which is the desired behaviour when replica
+    counts vary.  If the batch contains no valid positives at all a :class:`ValueError` is raised.
+
+    :param temperature: Logit scale divisor ``τ``.
+    :param tau_dist: Scale parameter for the negative soft-weight kernel
+        ``exp(-‖θ_i − θ_j‖ / tau_dist)``.
+    """
+
+    def __init__(self, temperature: float = 0.07, tau_dist: float = 1.0) -> None:
+        """Initialise with temperature and distance-kernel scale."""
+        super().__init__()
+        self.temperature = temperature
+        self.tau_dist = tau_dist
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _build_masks(labels: Tensor, b: int, device: torch.device) -> tuple[Tensor, Tensor]:
+        """
+        Build the positive and self-exclusion masks over the ``(B, 2B)`` similarity grid.
+
+        The ``2B`` columns correspond to the stacked embedding matrix ``[h_G; h_θ]``.
+        Anchor ``i`` (row) must never count itself (column ``i``) as a positive.
+
+        :param labels: ``(B,)`` integer group indices for the anchors.
+        :param b: Batch size ``B``.
+        :param device: Target device for the output tensors.
+
+        :returns: Tuple ``(pos_mask, self_mask)`` each of shape ``(B, 2B)`` and dtype bool.
+        """
+        tiled_labels = torch.cat([labels, labels], dim=0)  # (2B,)
+
+        # self_mask[i, i] = True — anchor i must not attend to its own h_G copy
+        self_mask = torch.zeros(b, 2 * b, dtype=torch.bool, device=device)
+        self_mask[torch.arange(b, device=device), torch.arange(b, device=device)] = True
+
+        # pos_mask[i, j] = True iff tiled_labels[j] == labels[i] and j != i
+        pos_mask = labels.unsqueeze(1) == tiled_labels.unsqueeze(0)  # (B, 2B)
+        pos_mask = pos_mask & ~self_mask
+
+        return pos_mask, self_mask
+
+    def _negative_weights(
+        self,
+        configs: Tensor,
+        pos_mask: Tensor,
+        self_mask: Tensor,
+    ) -> Tensor:
+        """
+        Compute soft negative weights from pairwise config distances.
+
+        ``w_ij = exp(-‖θ_i − θ_j‖ / tau_dist)`` for negative pairs, 0 elsewhere.
+        Nearby configs receive a weight close to 1 (soft negatives); distant configs
+        receive a weight near 0 (hard negatives).
+
+        :param configs: ``(B, C)`` normalised config vectors for the anchors.
+        :param pos_mask: ``(B, 2B)`` bool mask of valid positives.
+        :param self_mask: ``(B, 2B)`` bool mask of self-columns to exclude.
+
+        :returns: ``(B, 2B)`` float weight matrix, zero on positive and self entries.
+        """
+        tiled_configs = torch.cat([configs, configs], dim=0)  # (2B, C)
+        dist = torch.cdist(configs, tiled_configs, p=2)  # (B, 2B)
+        weights = torch.exp(-dist / self.tau_dist)
+        neg_mask = ~pos_mask & ~self_mask
+        return weights * neg_mask.float()
+
+    @staticmethod
+    def _compute_loss(sim: Tensor, pos_mask: Tensor, neg_weight: Tensor) -> Tensor:
+        """
+        Compute flat-pair-averaged contrastive loss given pre-scaled similarities.
+
+        For each ``(anchor i, positive p)`` pair::
+
+            loss_ip = -log( exp(sim_ip) / (Σ_{p'} exp(sim_ip') + Σ_n w_in · exp(sim_in)) )
+
+        The result is averaged over all valid pairs.
+
+        :param sim: ``(B, 2B)`` cosine similarities already divided by temperature.
+        :param pos_mask: ``(B, 2B)`` bool mask identifying positive pairs.
+        :param neg_weight: ``(B, 2B)`` float soft-weights for negative pairs (0 on positives).
+
+        :returns: Scalar loss tensor.
+        """
+        # Subtract row-wise max for numerical stability before exponentiation
+        sim_max = sim.detach().max(dim=1, keepdim=True).values
+        exp_sim = torch.exp(sim - sim_max)  # (B, 2B)
+
+        pos_exp = exp_sim * pos_mask.float()  # (B, 2B)
+        neg_exp = exp_sim * neg_weight  # (B, 2B)
+
+        denom = pos_exp.sum(dim=1, keepdim=True) + neg_exp.sum(dim=1, keepdim=True)  # (B, 1)
+        per_pair_loss = -torch.log(pos_exp / denom + 1e-8)  # (B, 2B)
+
+        n_pairs = pos_mask.sum().clamp(min=1)
+        return (per_pair_loss * pos_mask.float()).sum() / n_pairs
+
+    # ------------------------------------------------------------------
+    # Forward
+    # ------------------------------------------------------------------
+
+    def forward(
+        self,
+        graph_embeddings: Tensor,
+        config_embeddings: Tensor,
+        labels: Tensor,
+        configs: Tensor,
+    ) -> Tensor:
+        """
+        Compute the multi-positive supervised contrastive loss.
+
+        :param graph_embeddings: ``(B, D)`` graph embeddings ``h_G``; these are the anchors.
+        :param config_embeddings: ``(B, D)`` config embeddings ``h_θ``; positives/negatives.
+        :param labels: ``(B,)`` integer group index; ``graph_embeddings[i]`` and
+            ``config_embeddings[i]`` share ``labels[i]``.
+        :param configs: ``(B, C)`` normalised parameter vectors used for negative soft-weighting.
+
+        :returns: Scalar loss tensor with ``requires_grad=True``.
+        """
+        b = graph_embeddings.size(0)
+
+        h_g = F.normalize(graph_embeddings, dim=-1)
+        h_theta = F.normalize(config_embeddings, dim=-1)
+        all_embeddings = torch.cat([h_g, h_theta], dim=0)  # (2B, D)
+
+        sim = torch.mm(h_g, all_embeddings.t()) / self.temperature  # (B, 2B)
+
+        pos_mask, self_mask = self._build_masks(labels, b, sim.device)
+
+        if not pos_mask.any():
+            raise ValueError(
+                "MultiPositiveSupConLoss: no valid positives found in this batch. "
+                "Each sample has a distinct label — contrastive loss is undefined."
+            )
+
+        neg_weight = self._negative_weights(configs, pos_mask, self_mask)
+
+        return self._compute_loss(sim, pos_mask, neg_weight)
 
 
 class ABCDConstraintPenaltyLoss(nn.Module):
