@@ -141,10 +141,11 @@ L = L_reg + λ · L_SupCon
 
 - `L_reg` — MSE between predicted `θ_hat` and ground-truth `θ`; keeps the regression numerically
   grounded
-- `L_SupCon` — [Multi-Positive Supervised Contrastive Loss](https://arxiv.org/abs/2004.11362)
-  operating entirely within the graph embedding space: each `h_G` anchor is pulled towards other
-  `h_G` embeddings from the same `θ` and pushed away from those of different `θ`. The `θ` encoder
-  provides group labels only — it is not a contrastive target.
+- `L_SupCon` — [Multi-Positive Supervised Contrastive Loss](https://arxiv.org/abs/2004.11362) with
+  cross-modal positives: each `h_G` is an anchor; its positives are the matching `h_θ` embedding
+  (cross-modal, CLIP-style) **and** all other `h_G` embeddings from the same `θ` (same-modal
+  multi-positive). Negatives are all `h_θ` and `h_G` embeddings from different `θ`. Both encoders
+  are trained jointly; the shared `embedding_dim` is required.
   - negatives are **soft-weighted by parameter distance**: nearby configs are down-weighted rather
     than treated as hard negatives, which matters because `θ` is continuous
   - recommended batch: K≥32 configs × N graphs per config, e.g. 32×8=256 — contrastive losses
