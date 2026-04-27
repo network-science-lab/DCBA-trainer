@@ -6,8 +6,8 @@ import lightning.pytorch as pl
 import torch.nn as nn
 
 from dcba.datamodule import ABCDDataModule
-from dcba.models.config_encoder import ConfigEncoder
-from dcba.models.graph_encoder import GraphEncoder
+from dcba.models.config_autoencoder import ConfigAutoEncoder
+from dcba.models.ff_graph_config_predictor import FeedforwardGraphConfigPredictor
 from dcba.training.callbacks import get_callbacks
 from dcba.training.loggers import get_logger
 from dcba.training.loss import ABCDConstraintPenaltyLoss
@@ -18,8 +18,8 @@ _WRAPPERS = {
 }
 
 _MODELS = {
-    "ConfigEncoder": ConfigEncoder,
-    "GraphEncoder": GraphEncoder,
+    "ConfigAutoEncoder": ConfigAutoEncoder,
+    "FeedforwardGraphConfigPredictor": FeedforwardGraphConfigPredictor,
 }
 
 _LOSSES: dict[str, type[nn.Module]] = {
@@ -70,7 +70,7 @@ def train(config: dict) -> None:
         test_ratio=data_cfg["test_ratio"],
         batch_size=data_cfg["batch_size"],
         num_workers=data_cfg["num_workers"],
-        single_replica_per_instance=True if model_name == "ConfigEncoder" else False,
+        single_replica_per_instance=True if model_name == "ConfigAutoEncoder" else False,
         seed=config.get("random_seed", 42),
     )
 

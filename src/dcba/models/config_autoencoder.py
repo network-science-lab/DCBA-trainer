@@ -1,11 +1,11 @@
-"""Config encoder module — MLP autoencoder for ABCD configuration vectors."""
+"""Config autoencoder module — MLP autoencoder for ABCD configuration vectors."""
 
 import torch.nn as nn
 from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from torch import Tensor
 
 
-class ConfigEncoder(nn.Module):
+class ConfigAutoEncoder(nn.Module):
     """
     Parametrisable MLP autoencoder that maps a config vector ``q`` to an embedding ``h_q``.
 

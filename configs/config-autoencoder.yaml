@@ -20,7 +20,7 @@ model:
 
 training:
   wrapper: config_autoencoder
-  model_cls: ConfigEncoder
+  model_cls: ConfigAutoEncoder
   accelerator: gpu
   devices: [0]
   max_epochs: 100

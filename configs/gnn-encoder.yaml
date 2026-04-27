@@ -21,7 +21,7 @@ model:
 
 training:
   wrapper: config_autoencoder
-  model_cls: GraphEncoder
+  model_cls: FeedforwardGraphConfigPredictor
   accelerator: gpu
   devices: [0]
   max_epochs: 100

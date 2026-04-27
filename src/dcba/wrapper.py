@@ -30,7 +30,8 @@ class DCBAAutoencoderWrapper(pl.LightningModule):
     per-sample reconstruction rows and logs them as a wandb Table.
 
     :param encoder: The :class: `nn.Module` to train. In practice it will be
-        `~dcba.models.config_encoder.ConfigEncoder` or `~dcba.models.graph_encoder.GraphEncoder`
+        `~dcba.models.config_autoencoder.ConfigAutoEncoder` or
+        `~dcba.models.ff_graph_config_predictor.FeedforwardGraphConfigPredictor`
     :param optimizer_config: AdamW hyperparameters dict, expected keys ``lr`` and
         ``weight_decay``.
     :param scaler: Optional scaler used to inverse-transform normalised tensors back
