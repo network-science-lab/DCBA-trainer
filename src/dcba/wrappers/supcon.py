@@ -13,7 +13,6 @@ from torch import Tensor
 
 from dcba.dataset import ABCDConfigScaler
 from dcba.dataset.transforms import ABCD_CONFIG_KEYS
-from dcba.training.loss import MultiPositiveSupConLoss
 
 
 class DCBASupConWrapper(pl.LightningModule):
@@ -48,7 +47,7 @@ class DCBASupConWrapper(pl.LightningModule):
         config_encoder: nn.Module,
         optimizer_config: dict,
         reg_loss: nn.Module,
-        supcon_loss: MultiPositiveSupConLoss,
+        supcon_loss: nn.Module,
         lambda_supcon: float = 1.0,
         scaler: ABCDConfigScaler | None = None,
     ) -> None:

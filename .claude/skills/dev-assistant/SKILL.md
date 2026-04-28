@@ -94,8 +94,8 @@ Before making any other changes on a new branch:
 - Move files with `git mv`, never bare `mv`
 - Do not commit known-broken code — test before committing
 - Run `uv run pre-commit run --files <changed files>` before every commit
-- Commit messages: short imperative subject line in British English; follow the same ASCII-preferred
-  rule (Greek symbols allowed, but prefer `->` over `→` etc.)
+- Commit messages: single short imperative line, no body; British English; ASCII-preferred
+  (Greek symbols allowed, but prefer `->` over `→` etc.)
 - No co-authorship trailers in commit messages
 
 ---

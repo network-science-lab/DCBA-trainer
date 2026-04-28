@@ -30,6 +30,21 @@ _LOSSES: dict[str, type[nn.Module]] = {
 }
 
 
+def _build_model(model_cfg: dict) -> nn.Module:
+    """
+    Instantiate a model from a config dict.
+
+    :param model_cfg: Dict with ``cls`` (str) and constructor kwargs.
+
+    :returns: A model instance.
+    """
+    model_cfg = dict(model_cfg)
+    name = model_cfg.pop("cls")
+    if name not in _MODELS:
+        raise ValueError(f"Unknown model class '{name}'. Available: {list(_MODELS)}")
+    return _MODELS[name](**model_cfg)
+
+
 def _build_loss(loss_cfg: dict) -> nn.Module:
     """
     Instantiate a loss module from a config dict.
@@ -75,11 +90,7 @@ def train(config: dict) -> None:
     )
 
     if wrapper_name == "config_autoencoder":
-        model_cfg = dict(next(iter(config["models"].values())))
-        model_name = model_cfg.pop("cls")
-        if model_name not in _MODELS:
-            raise ValueError(f"Unknown model class '{model_name}'. Available: {list(_MODELS)}")
-        encoder = _MODELS[model_name](**model_cfg)
+        encoder = _build_model(next(iter(config["models"].values())))
         loss_fn = _build_loss(next(iter(training_cfg["losses"].values())))
         wrapper: pl.LightningModule = DCBAAutoencoderWrapper(
             encoder,
@@ -90,16 +101,8 @@ def train(config: dict) -> None:
         losses_cfg = training_cfg["losses"]
         reg_loss = _build_loss(losses_cfg["reg"])
         supcon_loss = _build_loss(losses_cfg["repr"])
-        if not isinstance(supcon_loss, MultiPositiveSupConLoss):
-            raise ValueError(
-                f"losses.repr must resolve to MultiPositiveSupConLoss, got {type(supcon_loss)}"
-            )
-        graph_model_cfg = dict(config["models"]["graph"])
-        graph_model_cfg.pop("cls")
-        theta_model_cfg = dict(config["models"]["theta"])
-        theta_model_cfg.pop("cls")
-        graph_encoder = FeedforwardGraphConfigPredictor(**graph_model_cfg)
-        config_encoder = ConfigAutoEncoder(**theta_model_cfg)
+        graph_encoder = _build_model(config["models"]["graph"])
+        config_encoder = _build_model(config["models"]["theta"])
         wrapper = DCBASupConWrapper(
             graph_encoder=graph_encoder,
             config_encoder=config_encoder,
