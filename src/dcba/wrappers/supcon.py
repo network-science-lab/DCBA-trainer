@@ -22,12 +22,13 @@ class DCBASupConWrapper(pl.LightningModule):
     Optimises ``L = L_reg + lambda * L_SupCon`` where:
 
     - ``L_reg`` -- configurable regression loss (e.g. MSE or
-      :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`) applied to the graph encoder's
-      predicted ``theta_hat`` against ground-truth ``theta``.
+      :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`) applied to the config encoder's
+      reconstructed ``theta_hat`` against ground-truth ``theta``.  Using the config encoder (a
+      simple MLP) stabilises ``h_theta`` early in training, providing a stronger SupCon signal.
     - ``L_SupCon`` -- :class:`~dcba.training.loss.MultiPositiveSupConLoss` with ``h_G`` as anchors
       and ``h_theta`` providing cross-modal positives and negatives.
 
-    Both encoders are trained jointly.  The config encoder's reconstruction output is not used.
+    Both encoders are trained jointly.
     Logs ``{stage}_loss``, ``{stage}_l_reg``, and ``{stage}_l_supcon`` at every step.
 
     :param graph_encoder: GNN that produces ``(h_G, theta_hat)`` -- in practice
@@ -63,7 +64,7 @@ class DCBASupConWrapper(pl.LightningModule):
         self._reg_loss = reg_loss
         self._supcon_loss = supcon_loss
         self._scaler = scaler
-        self._test_rows: list[tuple[list[float], list[float]]] = []
+        self._test_rows: list[tuple[list[float], list[float], list[float]]] = []
 
     def _unpack_batch(self, batch: DCBAHeteroData) -> tuple[Tensor, DCBAHeteroData, Tensor]:
         config = batch.config.reshape(batch.batch_size, -1)
@@ -88,8 +89,8 @@ class DCBASupConWrapper(pl.LightningModule):
     def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
         config, graph, target = self._unpack_batch(batch)
 
-        h_g, theta_hat = self._graph_encoder((config, graph))
-        h_theta, _ = self._config_encoder((config, graph))
+        h_g, _ = self._graph_encoder((config, graph))
+        h_theta, theta_hat = self._config_encoder((config, graph))
 
         labels = self._instance_labels(batch.instance_id, device=h_g.device)
 
@@ -97,10 +98,9 @@ class DCBASupConWrapper(pl.LightningModule):
         l_supcon = self._supcon_loss(h_g, h_theta, labels, config)
         loss = l_reg + self._lambda_supcon * l_supcon
 
-        bs = graph.batch_size
-        self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=bs)
-        self.log(f"{stage}_l_reg", l_reg, batch_size=bs)
-        self.log(f"{stage}_l_supcon", l_supcon, batch_size=bs)
+        self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=graph.batch_size)
+        self.log(f"{stage}_l_reg", l_reg, batch_size=graph.batch_size)
+        self.log(f"{stage}_l_supcon", l_supcon, batch_size=graph.batch_size)
         return loss
 
     def training_step(self, batch: DCBAHeteroData, batch_idx: int) -> Tensor:
@@ -112,31 +112,44 @@ class DCBASupConWrapper(pl.LightningModule):
         self._step(batch, "val")
 
     def on_test_epoch_start(self) -> None:
-        """Reset the per-sample prediction accumulator."""
+        """Reset the per-sample accumulator."""
         self._test_rows = []
 
     def test_step(self, batch: DCBAHeteroData, batch_idx: int) -> None:
-        """Compute and log test loss; accumulate graph-encoder predictions for logging."""
+        """Compute and log test loss; accumulate per-sample rows for the prediction table."""
         self._step(batch, "test")
 
         config, graph, _ = self._unpack_batch(batch)
         with torch.no_grad():
-            _, theta_hat = self._graph_encoder((config, graph))
+            h_g = self._graph_encoder.encode(graph)
+            theta_hat_cross = self._config_encoder.decode(h_g)
+            h_theta = self._config_encoder.encode(config)
+            theta_hat_recon = self._config_encoder.decode(h_theta)
 
-        x_cpu = config.detach().cpu()
-        x_hat_cpu = theta_hat.detach().cpu()
+        config_cpu = config.detach().cpu()
+        cross_cpu = theta_hat_cross.detach().cpu()
+        recon_cpu = theta_hat_recon.detach().cpu()
 
         if self._scaler is not None:
-            x_cpu = self._scaler.inverse_transform(x_cpu)
-            x_hat_cpu = self._scaler.inverse_transform(x_hat_cpu)
+            config_cpu = self._scaler.inverse_transform(config_cpu)
+            cross_cpu = self._scaler.inverse_transform(cross_cpu)
+            recon_cpu = self._scaler.inverse_transform(recon_cpu)
 
-        for orig, pred in zip(x_cpu.tolist(), x_hat_cpu.tolist(), strict=True):
-            self._test_rows.append((cast(list[float], orig), cast(list[float], pred)))
+        for orig, cross, recon in zip(
+            config_cpu.tolist(), cross_cpu.tolist(), recon_cpu.tolist(), strict=True
+        ):
+            self._test_rows.append(
+                (cast(list[float], orig), cast(list[float], recon), cast(list[float], cross))
+            )
 
     def on_test_epoch_end(self) -> None:
-        """Log original configs and graph-encoder predictions as a wandb Table.
+        """Log a wandb Table with original θ, config reconstruction, and cross-modal predictions.
 
-        Rows labelled ``{i}-o`` (original) and ``{i}-p`` (predicted) for side-by-side comparison.
+        Each sample occupies three rows:
+
+        - ``{i}-o``: original θ
+        - ``{i}-r``: MLP reconstruction -- ``config_encoder.decode(config_encoder.encode(θ))``
+        - ``{i}-c``: cross-modal prediction -- ``config_encoder.decode(graph_encoder.encode(G))``
         """
         if not isinstance(self.logger, WandbLogger):
             return
@@ -146,9 +159,10 @@ class DCBASupConWrapper(pl.LightningModule):
         suffix = "" if self._scaler is not None else "_norm"
         columns = ["sample"] + [f"{k}{suffix}" for k in ABCD_CONFIG_KEYS]
         rows = []
-        for i, (orig, pred) in enumerate(self._test_rows):
+        for i, (orig, recon, cross) in enumerate(self._test_rows):
             rows.append([f"{i}-o"] + orig)
-            rows.append([f"{i}-p"] + pred)
+            rows.append([f"{i}-r"] + recon)
+            rows.append([f"{i}-c"] + cross)
         table = wandb.Table(columns=columns, data=rows)
         self.logger.experiment.log({"test/predictions": table})
 

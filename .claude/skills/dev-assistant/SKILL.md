@@ -29,6 +29,7 @@ Use **British English** in all text: comments, docstrings, commit messages, and 
 - **Type hints** are required on every function signature (arguments and return type)
 - **Docstrings**: reStructuredText style, Sphinx field directives
   - Use `:param x:` and `:returns:` only — omit `:type x:`, `:rtype:`, and `:raises:`
+  - Every function parameter must have a `:param x:` entry; every non-None return must have `:returns:`
   - Class attribute documentation: plain prose, no `:ivar:`
   - One-liner docstrings stay on a single line
   - Multiline docstrings: text on a new line after `"""`, with `:returns:` separated from `:param`
