@@ -75,11 +75,12 @@ def train(config: dict) -> None:
     )
 
     if wrapper_name == "config_autoencoder":
-        model_name = training_cfg["model_cls"]
+        model_cfg = dict(next(iter(config["models"].values())))
+        model_name = model_cfg.pop("cls")
         if model_name not in _MODELS:
             raise ValueError(f"Unknown model class '{model_name}'. Available: {list(_MODELS)}")
-        encoder = _MODELS[model_name](**config["model"])
-        loss_fn = _build_loss(training_cfg["loss"])
+        encoder = _MODELS[model_name](**model_cfg)
+        loss_fn = _build_loss(next(iter(training_cfg["losses"].values())))
         wrapper: pl.LightningModule = DCBAAutoencoderWrapper(
             encoder,
             training_cfg["optimizer"]["args"],
@@ -93,15 +94,19 @@ def train(config: dict) -> None:
             raise ValueError(
                 f"losses.repr must resolve to MultiPositiveSupConLoss, got {type(supcon_loss)}"
             )
-        graph_encoder = FeedforwardGraphConfigPredictor(**config["model"])
-        config_encoder = ConfigAutoEncoder(**config["config_model"])
+        graph_model_cfg = dict(config["models"]["graph"])
+        graph_model_cfg.pop("cls")
+        theta_model_cfg = dict(config["models"]["theta"])
+        theta_model_cfg.pop("cls")
+        graph_encoder = FeedforwardGraphConfigPredictor(**graph_model_cfg)
+        config_encoder = ConfigAutoEncoder(**theta_model_cfg)
         wrapper = DCBASupConWrapper(
             graph_encoder=graph_encoder,
             config_encoder=config_encoder,
             optimizer_config=training_cfg["optimizer"]["args"],
             reg_loss=reg_loss,
             supcon_loss=supcon_loss,
-            lambda_supcon=training_cfg.get("lambda_supcon", 1.0),
+            lambda_supcon=losses_cfg["repr"].get("weight", 1.0),
         )
     else:
         raise ValueError(f"Unknown wrapper '{wrapper_name}'. Available: {list(_WRAPPERS)}")

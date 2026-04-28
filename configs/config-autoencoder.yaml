@@ -13,25 +13,28 @@ data:
   batch_size: 8
   num_workers: 0
 
-model:
-  input_dim: 9
-  hidden_dims: [64]
-  embedding_dim: 32
+models:
+  theta:
+    cls: ConfigAutoEncoder
+    input_dim: 9
+    hidden_dims: [64]
+    embedding_dim: 32
 
 training:
   wrapper: config_autoencoder
-  model_cls: ConfigAutoEncoder
   accelerator: gpu
   devices: [0]
   max_epochs: 100
-  loss:
-    name: mse
-    args: {}
+  losses:
+    reg:
+      name: mse
+      args: {}
   # To use the constraint-penalty loss:
-  # loss:
-  #   name: abcd_constraint
-  #   args:
-  #     lambda_penalty: 1.0
+  # losses:
+  #   reg:
+  #     name: abcd_constraint
+  #     args:
+  #       lambda_penalty: 1.0
   optimizer:
     name: AdamW
     args:

@@ -12,29 +12,31 @@ data:
   batch_size: 16 # small enough for interim dataset; scale to ~256 (K>=32 configs x N graphs) for production
   num_workers: 0
 
-config_model:
-  input_dim: 9
-  hidden_dims: [64]
-  embedding_dim: 32 # must match model.embedding_dim
-
-model:
-  input_dim: 1
-  hidden_dims: [64, 128]
-  embedding_dim: 32
-  output_dim: 9
+models:
+  graph:
+    cls: FeedforwardGraphConfigPredictor
+    input_dim: 1
+    hidden_dims: [64, 128]
+    embedding_dim: 32
+    output_dim: 9
+  theta:
+    cls: ConfigAutoEncoder
+    input_dim: 9
+    hidden_dims: [64]
+    embedding_dim: 32 # must match models.graph.embedding_dim
 
 training:
   wrapper: supcon
   accelerator: gpu
   devices: [0]
   max_epochs: 100
-  lambda_supcon: 1.0
   losses:
     reg:
       name: mse
       args: {}
     repr:
       name: supcon
+      weight: 1.0
       args:
         temperature: 0.07
         tau_dist: 1.0

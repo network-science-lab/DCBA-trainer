@@ -1,3 +1,5 @@
+# TODO: update it according to a new schema
+
 program: src/dcba/entrypoint.py
 command:
   - uv
