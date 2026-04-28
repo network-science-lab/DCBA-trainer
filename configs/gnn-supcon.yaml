@@ -1,0 +1,60 @@
+hydra:
+  run:
+    dir: .trainings/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+random_seed: 42
+
+data:
+  report_path: "test/dataset_abcd/report.json" # interim dataset for initial runs
+  n_max: 10000 # upper bound for all node-count-dependent scaler features
+  val_ratio: 0.15
+  test_ratio: 0.15
+  batch_size: 16 # small enough for interim dataset; scale to ~256 (K>=32 configs x N graphs) for production
+  num_workers: 0
+
+config_model:
+  input_dim: 9
+  hidden_dims: [64]
+  embedding_dim: 32 # must match model.embedding_dim
+
+model:
+  input_dim: 1
+  hidden_dims: [64, 128]
+  embedding_dim: 32
+  output_dim: 9
+
+training:
+  wrapper: supcon
+  accelerator: gpu
+  devices: [0]
+  max_epochs: 100
+  lambda_supcon: 1.0
+  loss:
+    name: supcon
+    args:
+      temperature: 0.07
+      tau_dist: 1.0
+  optimizer:
+    name: AdamW
+    args:
+      lr: 0.001
+      weight_decay: 0.00001
+  logger:
+    project: dcba
+    name: stage1-supcon
+    tags: [stage-1, supcon]
+  callbacks:
+    - name: model_checkpoint
+      monitor: val_loss
+      mode: min
+      save_top_k: 1
+      save_last: true
+      verbose: true
+    - name: early_stopping
+      monitor: val_loss
+      mode: min
+      patience: 20
+    - name: gradient_accumulation_scheduler
+      gradient_scheduling: 4
+    - name: model_summary
+      max_depth: -1

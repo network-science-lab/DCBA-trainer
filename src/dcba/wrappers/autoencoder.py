@@ -1,10 +1,4 @@
-"""Lightning wrappers for DCBA training regimes.
-
-Each training regime (Phase 1 autoencoder, Phase 2 joint, …) has its own
-:class:`~lightning.pytorch.LightningModule` subclass.  The :func:`~dcba.training.trainer.train`
-function selects the appropriate wrapper from config, keeping each wrapper focused and
-free of mode-switch flags.
-"""
+"""DCBAAutoencoderWrapper -- single-encoder training regime (autoencoder or regression)."""
 
 from typing import cast
 from unittest.mock import MagicMock

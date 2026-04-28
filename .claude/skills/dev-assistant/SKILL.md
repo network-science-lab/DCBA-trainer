@@ -22,6 +22,9 @@ Use **British English** in all text: comments, docstrings, commit messages, and 
 
 ## Code style
 
+- **ASCII preferred** — avoid non-ASCII characters in source code, comments, docstrings, and commit
+  messages; use ASCII equivalents when they exist and are concise (e.g. `->` not `→`, `||` not `‖`,
+  `<=` not `≤`); Greek letters used as established mathematical symbols are allowed (e.g. `θ`, `λ`)
 - Line length: **100 characters**
 - **Type hints** are required on every function signature (arguments and return type)
 - **Docstrings**: reStructuredText style, Sphinx field directives
@@ -91,7 +94,8 @@ Before making any other changes on a new branch:
 - Move files with `git mv`, never bare `mv`
 - Do not commit known-broken code — test before committing
 - Run `uv run pre-commit run --files <changed files>` before every commit
-- Commit messages: short imperative subject line in British English
+- Commit messages: short imperative subject line in British English; follow the same ASCII-preferred
+  rule (Greek symbols allowed, but prefer `->` over `→` etc.)
 - No co-authorship trailers in commit messages
 
 ---

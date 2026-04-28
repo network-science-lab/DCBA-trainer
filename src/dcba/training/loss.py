@@ -24,7 +24,7 @@ class MultiPositiveSupConLoss(nn.Module):
 
     :param temperature: Logit scale divisor ``τ``.
     :param tau_dist: Scale parameter for the negative soft-weight kernel
-        ``exp(-‖θ_i − θ_j‖ / tau_dist)``.
+        ``exp(-‖θ_i - θ_j‖ / tau_dist)``.
     """
 
     def __init__(self, temperature: float = 0.07, tau_dist: float = 1.0) -> None:
@@ -32,10 +32,6 @@ class MultiPositiveSupConLoss(nn.Module):
         super().__init__()
         self.temperature = temperature
         self.tau_dist = tau_dist
-
-    # ------------------------------------------------------------------
-    # Private helpers
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _build_masks(labels: Tensor, b: int, device: torch.device) -> tuple[Tensor, Tensor]:
@@ -105,9 +101,8 @@ class MultiPositiveSupConLoss(nn.Module):
 
         :returns: Scalar loss tensor.
         """
-        # Subtract row-wise max for numerical stability before exponentiation
-        sim_max = sim.detach().max(dim=1, keepdim=True).values
-        exp_sim = torch.exp(sim - sim_max)  # (B, 2B)
+        sim_max = sim.detach().max(dim=1, keepdim=True).values  # for exponent numerical stability
+        exp_sim = torch.exp(sim - sim_max)  # subtract row-wise max; dim = (B, 2B)
 
         pos_exp = exp_sim * pos_mask.float()  # (B, 2B)
         neg_exp = exp_sim * neg_weight  # (B, 2B)
@@ -117,10 +112,6 @@ class MultiPositiveSupConLoss(nn.Module):
 
         n_pairs = pos_mask.sum().clamp(min=1)
         return (per_pair_loss * pos_mask.float()).sum() / n_pairs
-
-    # ------------------------------------------------------------------
-    # Forward
-    # ------------------------------------------------------------------
 
     def forward(
         self,
@@ -184,7 +175,7 @@ class ABCDConstraintPenaltyLoss(nn.Module):
         to accommodate edge cases where the model predicts graphs larger than ``n_max``.
 
     Feature indices follow :data:`~dcba.dataset.transforms.ABCD_CONFIG_KEYS`:
-    ``[n, t1, t2, xi, c_min, c_max, d_min, d_max, nout]`` → indices 0–8.
+    ``[n, t1, t2, xi, c_min, c_max, d_min, d_max, nout]`` -> indices 0-8.
 
     :param lambda_penalty: Weight applied to the sum of constraint penalty terms.
     """

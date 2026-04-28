@@ -1,4 +1,4 @@
-"""Training entry point — orchestrates Lightning Trainer, datamodule, and wrapper."""
+"""Training entry point -- orchestrates Lightning Trainer, datamodule, and wrapper."""
 
 from pathlib import Path
 
@@ -10,11 +10,12 @@ from dcba.models.config_autoencoder import ConfigAutoEncoder
 from dcba.models.ff_graph_config_predictor import FeedforwardGraphConfigPredictor
 from dcba.training.callbacks import get_callbacks
 from dcba.training.loggers import get_logger
-from dcba.training.loss import ABCDConstraintPenaltyLoss
-from dcba.wrapper import DCBAAutoencoderWrapper
+from dcba.training.loss import ABCDConstraintPenaltyLoss, MultiPositiveSupConLoss
+from dcba.wrappers import DCBAAutoencoderWrapper, DCBASupConWrapper
 
 _WRAPPERS = {
     "config_autoencoder": DCBAAutoencoderWrapper,
+    "supcon": DCBASupConWrapper,
 }
 
 _MODELS = {
@@ -25,6 +26,7 @@ _MODELS = {
 _LOSSES: dict[str, type[nn.Module]] = {
     "mse": nn.MSELoss,
     "abcd_constraint": ABCDConstraintPenaltyLoss,
+    "supcon": MultiPositiveSupConLoss,
 }
 
 
@@ -55,12 +57,10 @@ def train(config: dict) -> None:
     """
     logger = get_logger(config)
 
-    model_cfg = config["model"]
-    model_name = config["training"]["model_cls"]
-    if model_name not in _MODELS:
-        raise ValueError(f"Unknown model class '{model_name}'. Available: {list(_MODELS)}")
-    model_cls = _MODELS[model_name]
-    encoder = model_cls(**model_cfg)
+    training_cfg = config["training"]
+    wrapper_name = training_cfg["wrapper"]
+    if wrapper_name not in _WRAPPERS:
+        raise ValueError(f"Unknown wrapper '{wrapper_name}'. Available: {list(_WRAPPERS)}")
 
     data_cfg = config["data"]
     datamodule = ABCDDataModule(
@@ -70,27 +70,45 @@ def train(config: dict) -> None:
         test_ratio=data_cfg["test_ratio"],
         batch_size=data_cfg["batch_size"],
         num_workers=data_cfg["num_workers"],
-        single_replica_per_instance=True if model_name == "ConfigAutoEncoder" else False,
+        single_replica_per_instance=wrapper_name == "config_autoencoder",
         seed=config.get("random_seed", 42),
     )
 
-    loss_fn = _build_loss(config["training"]["loss"])
+    loss_fn = _build_loss(training_cfg["loss"])
 
-    wrapper_name = config["training"]["wrapper"]
-    if wrapper_name not in _WRAPPERS:
+    if wrapper_name == "config_autoencoder":
+        model_name = training_cfg["model_cls"]
+        if model_name not in _MODELS:
+            raise ValueError(f"Unknown model class '{model_name}'. Available: {list(_MODELS)}")
+        encoder = _MODELS[model_name](**config["model"])
+        wrapper: pl.LightningModule = DCBAAutoencoderWrapper(
+            encoder,
+            training_cfg["optimizer"]["args"],
+            loss_fn=loss_fn,
+        )
+    elif wrapper_name == "supcon":
+        if not isinstance(loss_fn, MultiPositiveSupConLoss):
+            raise ValueError(
+                f"supcon wrapper requires a MultiPositiveSupConLoss, got {type(loss_fn)}"
+            )
+        graph_encoder = FeedforwardGraphConfigPredictor(**config["model"])
+        config_encoder = ConfigAutoEncoder(**config["config_model"])
+        wrapper = DCBASupConWrapper(
+            graph_encoder=graph_encoder,
+            config_encoder=config_encoder,
+            optimizer_config=training_cfg["optimizer"]["args"],
+            supcon_loss=loss_fn,
+            lambda_supcon=training_cfg.get("lambda_supcon", 1.0),
+        )
+    else:
         raise ValueError(f"Unknown wrapper '{wrapper_name}'. Available: {list(_WRAPPERS)}")
-    wrapper = _WRAPPERS[wrapper_name](
-        encoder,
-        config["training"]["optimizer"]["args"],
-        loss_fn=loss_fn,
-    )
 
     logger.log_hyperparams({key: value for key, value in config.items() if key != "hydra"})
     logger.watch(wrapper)
     trainer = pl.Trainer(
-        max_epochs=config["training"]["max_epochs"],
-        accelerator=config["training"]["accelerator"],
-        devices=config["training"]["devices"],
+        max_epochs=training_cfg["max_epochs"],
+        accelerator=training_cfg["accelerator"],
+        devices=training_cfg["devices"],
         log_every_n_steps=1,
         callbacks=get_callbacks(config),
         logger=logger,
