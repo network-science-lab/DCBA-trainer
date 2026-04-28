@@ -6,7 +6,6 @@ from unittest.mock import MagicMock
 import lightning.pytorch as pl
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import wandb
 from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from lightning.pytorch.loggers import WandbLogger
@@ -23,8 +22,9 @@ class DCBASupConWrapper(pl.LightningModule):
 
     Optimises ``L = L_reg + lambda * L_SupCon`` where:
 
-    - ``L_reg`` -- MSE between the graph encoder's predicted ``theta_hat`` and ground-truth
-      ``theta``.
+    - ``L_reg`` -- configurable regression loss (e.g. MSE or
+      :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`) applied to the graph encoder's
+      predicted ``theta_hat`` against ground-truth ``theta``.
     - ``L_SupCon`` -- :class:`~dcba.training.loss.MultiPositiveSupConLoss` with ``h_G`` as anchors
       and ``h_theta`` providing cross-modal positives and negatives.
 
@@ -36,8 +36,9 @@ class DCBASupConWrapper(pl.LightningModule):
     :param config_encoder: MLP autoencoder that produces ``(h_theta, theta_hat)`` -- in practice
         :class:`~dcba.models.config_autoencoder.ConfigAutoEncoder`.
     :param optimizer_config: AdamW hyperparameters dict, expected keys ``lr`` and ``weight_decay``.
-    :param lambda_supcon: Weight ``lambda`` applied to the contrastive loss term.
+    :param reg_loss: Loss module applied to ``(theta_hat, theta)`` for the regression term.
     :param supcon_loss: Pre-built :class:`~dcba.training.loss.MultiPositiveSupConLoss` instance.
+    :param lambda_supcon: Weight ``lambda`` applied to the contrastive loss term.
     :param scaler: Optional scaler for inverse-transforming tensors before test logging.
     """
 
@@ -46,17 +47,21 @@ class DCBASupConWrapper(pl.LightningModule):
         graph_encoder: nn.Module,
         config_encoder: nn.Module,
         optimizer_config: dict,
+        reg_loss: nn.Module,
         supcon_loss: MultiPositiveSupConLoss,
         lambda_supcon: float = 1.0,
         scaler: ABCDConfigScaler | None = None,
     ) -> None:
         """Initialise with both encoders, optimiser settings, and loss hyperparameters."""
         super().__init__()
-        self.save_hyperparameters(ignore=["graph_encoder", "config_encoder", "supcon_loss"])
+        self.save_hyperparameters(
+            ignore=["graph_encoder", "config_encoder", "reg_loss", "supcon_loss"]
+        )
         self._graph_encoder = graph_encoder
         self._config_encoder = config_encoder
         self._optimizer_config = optimizer_config
         self._lambda_supcon = lambda_supcon
+        self._reg_loss = reg_loss
         self._supcon_loss = supcon_loss
         self._scaler = scaler
         self._test_rows: list[tuple[list[float], list[float]]] = []
@@ -89,7 +94,7 @@ class DCBASupConWrapper(pl.LightningModule):
 
         labels = self._instance_labels(batch.instance_id, device=h_g.device)
 
-        l_reg = F.mse_loss(theta_hat, target)
+        l_reg = self._reg_loss(theta_hat, target)
         l_supcon = self._supcon_loss(h_g, h_theta, labels, config)
         loss = l_reg + self._lambda_supcon * l_supcon
 

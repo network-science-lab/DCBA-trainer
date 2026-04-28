@@ -29,11 +29,15 @@ training:
   devices: [0]
   max_epochs: 100
   lambda_supcon: 1.0
-  loss:
-    name: supcon
-    args:
-      temperature: 0.07
-      tau_dist: 1.0
+  losses:
+    reg:
+      name: mse
+      args: {}
+    repr:
+      name: supcon
+      args:
+        temperature: 0.07
+        tau_dist: 1.0
   optimizer:
     name: AdamW
     args:
