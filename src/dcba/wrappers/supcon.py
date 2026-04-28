@@ -24,16 +24,16 @@ class DCBASupConWrapper(pl.LightningModule):
     - ``L_reg`` -- configurable regression loss (e.g. MSE or
       :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`) applied to the config encoder's
       reconstructed ``theta_hat`` against ground-truth ``theta``.  Using the config encoder (a
-      simple MLP) stabilises ``h_theta`` early in training, providing a stronger SupCon signal.
-    - ``L_SupCon`` -- :class:`~dcba.training.loss.MultiPositiveSupConLoss` with ``h_G`` as anchors
-      and ``h_theta`` providing cross-modal positives and negatives.
+      simple MLP) stabilises ``z_theta`` early in training, providing a stronger SupCon signal.
+    - ``L_SupCon`` -- :class:`~dcba.training.loss.MultiPositiveSupConLoss` with ``z_g`` as anchors
+      and ``z_theta`` providing cross-modal positives and negatives.
 
     Both encoders are trained jointly.
     Logs ``{stage}_loss``, ``{stage}_l_reg``, and ``{stage}_l_supcon`` at every step.
 
-    :param graph_encoder: GNN that produces ``(h_G, theta_hat)`` -- in practice
-        :class:`~dcba.models.ff_graph_config_predictor.FeedforwardGraphConfigPredictor`.
-    :param config_encoder: MLP autoencoder that produces ``(h_theta, theta_hat)`` -- in practice
+    :param graph_encoder: GNN that produces ``(z_g, theta_hat)`` -- in practice
+        :class:`~dcba.models.gin_encoder.GINEncoder`.
+    :param config_encoder: MLP autoencoder that produces ``(z_theta, theta_hat)`` -- in practice
         :class:`~dcba.models.config_autoencoder.ConfigAutoEncoder`.
     :param optimizer_config: AdamW hyperparameters dict, expected keys ``lr`` and ``weight_decay``.
     :param reg_loss: Loss module applied to ``(theta_hat, theta)`` for the regression term.
@@ -89,13 +89,13 @@ class DCBASupConWrapper(pl.LightningModule):
     def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
         config, graph, target = self._unpack_batch(batch)
 
-        h_g, _ = self._graph_encoder((config, graph))
-        h_theta, theta_hat = self._config_encoder((config, graph))
+        z_g, _ = self._graph_encoder((config, graph))
+        z_theta, theta_hat = self._config_encoder((config, graph))
 
-        labels = self._instance_labels(batch.instance_id, device=h_g.device)
+        labels = self._instance_labels(batch.instance_id, device=z_g.device)
 
         l_reg = self._reg_loss(theta_hat, target)
-        l_supcon = self._supcon_loss(h_g, h_theta, labels, config)
+        l_supcon = self._supcon_loss(z_g, z_theta, labels, config)
         loss = l_reg + self._lambda_supcon * l_supcon
 
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=graph.batch_size)
@@ -121,10 +121,10 @@ class DCBASupConWrapper(pl.LightningModule):
 
         config, graph, _ = self._unpack_batch(batch)
         with torch.no_grad():
-            h_g = self._graph_encoder.encode(graph)
-            theta_hat_cross = self._config_encoder.decode(h_g)
-            h_theta = self._config_encoder.encode(config)
-            theta_hat_recon = self._config_encoder.decode(h_theta)
+            z_g = self._graph_encoder.encode(graph)
+            theta_hat_cross = self._config_encoder.decode(z_g)
+            z_theta = self._config_encoder.encode(config)
+            theta_hat_recon = self._config_encoder.decode(z_theta)
 
         config_cpu = config.detach().cpu()
         cross_cpu = theta_hat_cross.detach().cpu()
@@ -165,6 +165,10 @@ class DCBASupConWrapper(pl.LightningModule):
             rows.append([f"{i}-c"] + cross)
         table = wandb.Table(columns=columns, data=rows)
         self.logger.experiment.log({"test/predictions": table})
+
+    def set_scaler(self, scaler: ABCDConfigScaler | None) -> None:
+        """Set the scaler used to inverse-transform tensors before test logging."""
+        self._scaler = scaler
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         """Build and return an AdamW optimiser over both encoders."""

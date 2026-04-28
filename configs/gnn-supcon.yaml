@@ -5,7 +5,7 @@ hydra:
 random_seed: 42
 
 data:
-  report_path: "test/dataset_abcd/report.json" # interim dataset for initial runs
+  report_path: "abcd-interim/report.json"
   n_max: 10000 # upper bound for all node-count-dependent scaler features
   val_ratio: 0.15
   test_ratio: 0.15
@@ -14,7 +14,7 @@ data:
 
 models:
   graph:
-    cls: FeedforwardGraphConfigPredictor
+    cls: GINEncoder
     input_dim: 1
     hidden_dims: [64, 128]
     embedding_dim: 32
@@ -31,9 +31,13 @@ training:
   devices: [0]
   max_epochs: 100
   losses:
+    # reg:
+    #   name: mse
+    #   args: {}
     reg:
-      name: mse
-      args: {}
+      name: abcd_constraint
+      args:
+        lambda_penalty: 1.0
     repr:
       name: supcon
       weight: 1.0

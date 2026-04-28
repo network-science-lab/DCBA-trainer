@@ -7,7 +7,7 @@ import torch.nn as nn
 
 from dcba.datamodule import ABCDDataModule
 from dcba.models.config_autoencoder import ConfigAutoEncoder
-from dcba.models.ff_graph_config_predictor import FeedforwardGraphConfigPredictor
+from dcba.models.gin_encoder import GINEncoder
 from dcba.training.callbacks import get_callbacks
 from dcba.training.loggers import get_logger
 from dcba.training.loss import ABCDConstraintPenaltyLoss, MultiPositiveSupConLoss
@@ -20,7 +20,7 @@ _WRAPPERS = {
 
 _MODELS = {
     "ConfigAutoEncoder": ConfigAutoEncoder,
-    "FeedforwardGraphConfigPredictor": FeedforwardGraphConfigPredictor,
+    "GINEncoder": GINEncoder,
 }
 
 _LOSSES: dict[str, type[nn.Module]] = {
@@ -74,8 +74,6 @@ def train(config: dict) -> None:
 
     training_cfg = config["training"]
     wrapper_name = training_cfg["wrapper"]
-    if wrapper_name not in _WRAPPERS:
-        raise ValueError(f"Unknown wrapper '{wrapper_name}'. Available: {list(_WRAPPERS)}")
 
     data_cfg = config["data"]
     datamodule = ABCDDataModule(
@@ -125,7 +123,7 @@ def train(config: dict) -> None:
         logger=logger,
     )
     trainer.fit(wrapper, datamodule=datamodule)
-    wrapper._scaler = datamodule.scaler
+    wrapper.set_scaler(datamodule.scaler)
     metrics = trainer.test(wrapper, datamodule=datamodule)
     for i in Path(f"{config['hydra']['runtime']['output_dir']}/checkpoints").iterdir():
         logger.experiment.log_artifact(

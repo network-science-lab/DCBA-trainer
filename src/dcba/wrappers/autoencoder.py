@@ -25,7 +25,7 @@ class DCBAAutoencoderWrapper(pl.LightningModule):
 
     :param encoder: The :class: `nn.Module` to train. In practice it will be
         `~dcba.models.config_autoencoder.ConfigAutoEncoder` or
-        `~dcba.models.ff_graph_config_predictor.FeedforwardGraphConfigPredictor`
+        `~dcba.models.gin_encoder.GINEncoder`
     :param optimizer_config: AdamW hyperparameters dict, expected keys ``lr`` and
         ``weight_decay``.
     :param scaler: Optional scaler used to inverse-transform normalised tensors back
@@ -102,16 +102,16 @@ class DCBAAutoencoderWrapper(pl.LightningModule):
 
         config, graph, _ = self._unpack_batch(batch)
         with torch.no_grad():
-            _, x_hat = self._encoder((config, graph))
+            _, theta_hat = self._encoder((config, graph))
 
-        x_cpu = config.detach().cpu()
-        x_hat_cpu = x_hat.detach().cpu()
+        config_cpu = config.detach().cpu()
+        recon_cpu = theta_hat.detach().cpu()
 
         if self._scaler is not None:
-            x_cpu = self._scaler.inverse_transform(x_cpu)
-            x_hat_cpu = self._scaler.inverse_transform(x_hat_cpu)
+            config_cpu = self._scaler.inverse_transform(config_cpu)
+            recon_cpu = self._scaler.inverse_transform(recon_cpu)
 
-        for orig, recon in zip(x_cpu.tolist(), x_hat_cpu.tolist(), strict=True):
+        for orig, recon in zip(config_cpu.tolist(), recon_cpu.tolist(), strict=True):
             self._test_rows.append((cast(list[float], orig), cast(list[float], recon)))
 
     def on_test_epoch_end(self) -> None:
@@ -134,6 +134,10 @@ class DCBAAutoencoderWrapper(pl.LightningModule):
             rows.append([f"{i}-r"] + recon)
         table = wandb.Table(columns=columns, data=rows)
         self.logger.experiment.log({"test/reconstructions": table})
+
+    def set_scaler(self, scaler: ABCDConfigScaler | None) -> None:
+        """Set the scaler used to inverse-transform tensors before test logging."""
+        self._scaler = scaler
 
     def configure_optimizers(self) -> torch.optim.Optimizer:
         """Build and return an AdamW optimiser."""

@@ -133,11 +133,11 @@ class MultiPositiveSupConLoss(nn.Module):
         """
         b = graph_embeddings.size(0)
 
-        h_g = F.normalize(graph_embeddings, dim=-1)
-        h_theta = F.normalize(config_embeddings, dim=-1)
-        all_embeddings = torch.cat([h_g, h_theta], dim=0)  # (2B, D)
+        z_g = F.normalize(graph_embeddings, dim=-1)
+        z_theta = F.normalize(config_embeddings, dim=-1)
+        all_embeddings = torch.cat([z_g, z_theta], dim=0)  # (2B, D)
 
-        sim = torch.mm(h_g, all_embeddings.t()) / self.temperature  # (B, 2B)
+        sim = torch.mm(z_g, all_embeddings.t()) / self.temperature  # (B, 2B)
 
         pos_mask, self_mask = self._build_masks(labels, b, sim.device)
 

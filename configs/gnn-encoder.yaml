@@ -15,7 +15,7 @@ data:
 
 models:
   graph:
-    cls: FeedforwardGraphConfigPredictor
+    cls: GINEncoder
     input_dim: 1
     hidden_dims: [64, 128]
     embedding_dim: 32
