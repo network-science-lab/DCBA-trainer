@@ -92,6 +92,4 @@ class ABCDDataset(Dataset):
         g["actor"].x = zeros((len(g.actors_map), 5))
         g.config = t
         g.y = t.clone()
-        g.actors_map = None
-        g.layers_map = None
         return g
