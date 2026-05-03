@@ -22,7 +22,7 @@ models:
   theta:
     cls: ConfigAutoEncoder
     input_dim: 9
-    hidden_dims: [64]
+    hidden_dims: [128, 64]
     embedding_dim: 32 # must match models.graph.embedding_dim
 
 training:
@@ -43,6 +43,7 @@ training:
       args:
         temperature: 0.07
         tau_dist: 1.0
+        bidirectional: true
   optimizer:
     name: AdamW
     args:
@@ -51,7 +52,7 @@ training:
   logger:
     project: dcba
     name: mm-supcon
-    tags: [supcon, abcd-constraint, expand-compress-gnn]
+    tags: [supcon, abcd-constraint, expand-compress-gnn, bidirectional, deeper-theta]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss
