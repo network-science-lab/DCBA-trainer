@@ -1,6 +1,7 @@
 """Unit tests for DCBA loss functions."""
 
 import torch
+import torch.nn.functional as F
 
 from dcba.training.loss import MultiPositiveSupConLoss
 
@@ -14,6 +15,10 @@ def _make_batch(
     """
     Build a synthetic batch for loss testing.
 
+    Embeddings are L2-normalised to match the contract expected by
+    :class:`~dcba.training.loss.MultiPositiveSupConLoss` (normalisation is the caller's
+    responsibility, as in the training wrapper).
+
     :param b: Total batch size.
     :param d: Embedding dimensionality.
     :param n_configs: Number of distinct config groups; labels are assigned round-robin.
@@ -22,8 +27,8 @@ def _make_batch(
     :returns: Tuple ``(graph_embeddings, config_embeddings, labels, configs)``.
     """
     torch.manual_seed(0)
-    graph_emb = torch.randn(b, d, device=device, requires_grad=True)
-    config_emb = torch.randn(b, d, device=device, requires_grad=True)
+    graph_emb = F.normalize(torch.randn(b, d, device=device), dim=-1).requires_grad_(True)
+    config_emb = F.normalize(torch.randn(b, d, device=device), dim=-1).requires_grad_(True)
     labels = torch.arange(b, device=device) % n_configs
     configs = torch.rand(b, 9, device=device)
     return graph_emb, config_emb, labels, configs

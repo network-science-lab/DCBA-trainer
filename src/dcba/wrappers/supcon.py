@@ -5,6 +5,7 @@ from unittest.mock import MagicMock
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import wandb
 from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from lightning.pytorch.loggers import WandbLogger
@@ -84,8 +85,9 @@ class DCBASupConWrapper(DCBABaseWrapper):
     def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
         config, graph, target = self._unpack_batch(batch)
 
-        z_g, _ = self._graph_encoder((config, graph))
-        z_theta, theta_hat = self._config_encoder((config, graph))
+        z_g = F.normalize(self._graph_encoder.encode(graph), dim=-1)
+        z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
+        theta_hat = self._config_encoder.decode(z_theta)
 
         labels = self._instance_labels(cast(list[str], batch.instance_id), device=z_g.device)
 
@@ -105,9 +107,9 @@ class DCBASupConWrapper(DCBABaseWrapper):
 
         config, graph, _ = self._unpack_batch(batch)
         with torch.no_grad():
-            z_g = self._graph_encoder.encode(graph)
+            z_g = F.normalize(self._graph_encoder.encode(graph), dim=-1)
             theta_hat_cross = self._config_encoder.decode(z_g)
-            z_theta = self._config_encoder.encode(config)
+            z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
             theta_hat_recon = self._config_encoder.decode(z_theta)
 
         config_cpu = config.detach().cpu()

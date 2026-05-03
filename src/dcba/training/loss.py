@@ -10,14 +10,14 @@ class MultiPositiveSupConLoss(nn.Module):
     """
     Cross-modal Multi-Positive Supervised Contrastive Loss with soft-weighted negatives.
 
-    Graph embeddings ``h_G`` act as anchors in the forward direction.  For anchor ``i`` the
-    positive set contains the matching config embedding ``h_θ_i`` (cross-modal) and all other
-    graph embeddings ``h_G_j`` that share the same ``instance_id`` label (same-modal).  All
+    Graph embeddings ``z_G`` act as anchors in the forward direction.  For anchor ``i`` the
+    positive set contains the matching config embedding ``z_θ_i`` (cross-modal) and all other
+    graph embeddings ``z_G_j`` that share the same ``instance_id`` label (same-modal).  All
     embeddings from instances with a different label are negatives, down-weighted by their
     distance in parameter space so that nearby configs are not treated as hard negatives.
 
-    When ``bidirectional=True`` (default), the loss is run in both directions -- ``h_G`` anchors
-    vs ``h_θ`` pool **and** ``h_θ`` anchors vs ``h_G`` pool -- and the two terms are summed.
+    When ``bidirectional=True`` (default), the loss is run in both directions -- ``z_G`` anchors
+    vs ``z_θ`` pool **and** ``z_θ`` anchors vs ``z_G`` pool -- and the two terms are summed.
     This CLIP-style symmetric objective aligns both embedding spaces from both sides, which is
     required for the test-time cross-modal decoding path ``z_G -> config_decoder -> θ_hat``.
 
@@ -169,22 +169,24 @@ class MultiPositiveSupConLoss(nn.Module):
         """
         Compute the multi-positive supervised contrastive loss.
 
-        :param graph_embeddings: ``(B, D)`` graph embeddings ``h_G``; anchors in the forward
-            direction.
-        :param config_embeddings: ``(B, D)`` config embeddings ``h_θ``; anchors in the reverse
-            direction when ``bidirectional=True``.
+        :param graph_embeddings: ``(B, D)`` L2-normalised graph embeddings ``z_G``; anchors in
+            the forward direction.
+        :param config_embeddings: ``(B, D)`` L2-normalised config embeddings ``z_θ``; anchors
+            in the reverse direction when ``bidirectional=True``.
         :param labels: ``(B,)`` integer group index; ``graph_embeddings[i]`` and
             ``config_embeddings[i]`` share ``labels[i]``.
         :param configs: ``(B, C)`` normalised parameter vectors used for negative soft-weighting.
 
+        Both tensors must be L2-normalised before being passed in; the wrapper is responsible
+        for normalisation so that the decoder operates in the same space.
+
         :returns: Scalar loss tensor with ``requires_grad=True``.
         """
-        z_g = F.normalize(graph_embeddings, dim=-1)
-        z_theta = F.normalize(config_embeddings, dim=-1)
-
-        loss = self._directional_loss(z_g, z_theta, labels, configs)
+        loss = self._directional_loss(graph_embeddings, config_embeddings, labels, configs)
         if self.bidirectional:
-            loss = loss + self._directional_loss(z_theta, z_g, labels, configs)
+            loss = loss + self._directional_loss(
+                config_embeddings, graph_embeddings, labels, configs
+            )
         return loss
 
 
