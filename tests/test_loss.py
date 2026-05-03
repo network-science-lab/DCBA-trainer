@@ -227,3 +227,29 @@ class TestMultiPositiveSupConLossForward:
 
         assert g.grad is not None
         assert c.grad is not None
+
+    def test_unidirectional_flag(self) -> None:
+        """Loss with ``bidirectional=False`` is a scalar with grad."""
+        loss_fn = MultiPositiveSupConLoss(bidirectional=False)
+        g, c, labels, configs = _make_batch(b=8, d=16, n_configs=4)
+        loss = loss_fn(g, c, labels, configs)
+
+        assert loss.ndim == 0
+        assert loss.requires_grad
+
+    def test_bidirectional_larger_than_unidirectional(self) -> None:
+        """Bidirectional loss sums two directional terms, so it must exceed the unidirectional."""
+        g, c, labels, configs = _make_batch(b=8, d=16, n_configs=4)
+        loss_bi = MultiPositiveSupConLoss(bidirectional=True)(g, c, labels, configs)
+        loss_uni = MultiPositiveSupConLoss(bidirectional=False)(g, c, labels, configs)
+
+        assert loss_bi.item() > loss_uni.item()
+
+    def test_bidirectional_backward_passes(self) -> None:
+        """Gradients from the bidirectional loss flow to both graph and config embeddings."""
+        loss_fn = MultiPositiveSupConLoss(bidirectional=True)
+        g, c, labels, configs = _make_batch(b=8, d=16, n_configs=4)
+        loss_fn(g, c, labels, configs).backward()
+
+        assert g.grad is not None
+        assert c.grad is not None

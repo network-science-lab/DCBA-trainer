@@ -10,35 +10,47 @@ class MultiPositiveSupConLoss(nn.Module):
     """
     Cross-modal Multi-Positive Supervised Contrastive Loss with soft-weighted negatives.
 
-    Graph embeddings ``h_G`` act as anchors.  For anchor ``i`` the positive set contains the
-    matching config embedding ``h_θ_i`` (cross-modal) and all other graph embeddings ``h_G_j``
-    that share the same ``instance_id`` label (same-modal).  All embeddings from instances with
-    a different label are negatives, down-weighted by their distance in parameter space so that
-    nearby configs are not treated as hard negatives.
+    Graph embeddings ``h_G`` act as anchors in the forward direction.  For anchor ``i`` the
+    positive set contains the matching config embedding ``h_θ_i`` (cross-modal) and all other
+    graph embeddings ``h_G_j`` that share the same ``instance_id`` label (same-modal).  All
+    embeddings from instances with a different label are negatives, down-weighted by their
+    distance in parameter space so that nearby configs are not treated as hard negatives.
+
+    When ``bidirectional=True`` (default), the loss is run in both directions -- ``h_G`` anchors
+    vs ``h_θ`` pool **and** ``h_θ`` anchors vs ``h_G`` pool -- and the two terms are summed.
+    This CLIP-style symmetric objective aligns both embedding spaces from both sides, which is
+    required for the test-time cross-modal decoding path ``z_G -> config_decoder -> θ_hat``.
 
     Both ``graph_embeddings`` and ``config_embeddings`` must have the same ``embedding_dim``.
 
-    The loss is averaged over all ``(anchor, positive)`` pairs — anchors with more in-batch
+    The loss is averaged over all ``(anchor, positive)`` pairs -- anchors with more in-batch
     positives contribute proportionally more signal, which is the desired behaviour when replica
     counts vary.  If the batch contains no valid positives at all a :class:`ValueError` is raised.
 
     :param temperature: Logit scale divisor ``τ``.
     :param tau_dist: Scale parameter for the negative soft-weight kernel
-        ``exp(-‖θ_i - θ_j‖ / tau_dist)``.
+        ``exp(-||θ_i - θ_j|| / tau_dist)``.
+    :param bidirectional: When ``True``, run the loss in both directions (CLIP-style) and sum.
     """
 
-    def __init__(self, temperature: float = 0.07, tau_dist: float = 1.0) -> None:
-        """Initialise with temperature and distance-kernel scale."""
+    def __init__(
+        self,
+        temperature: float = 0.07,
+        tau_dist: float = 1.0,
+        bidirectional: bool = True,
+    ) -> None:
+        """Initialise with temperature, distance-kernel scale, and directionality."""
         super().__init__()
         self.temperature = temperature
         self.tau_dist = tau_dist
+        self.bidirectional = bidirectional
 
     @staticmethod
     def _build_masks(labels: Tensor, b: int, device: torch.device) -> tuple[Tensor, Tensor]:
         """
         Build the positive and self-exclusion masks over the ``(B, 2B)`` similarity grid.
 
-        The ``2B`` columns correspond to the stacked embedding matrix ``[h_G; h_θ]``.
+        The ``2B`` columns correspond to the stacked embedding matrix ``[anchors; others]``.
         Anchor ``i`` (row) must never count itself (column ``i``) as a positive.
 
         :param labels: ``(B,)`` integer group indices for the anchors.
@@ -49,7 +61,7 @@ class MultiPositiveSupConLoss(nn.Module):
         """
         tiled_labels = torch.cat([labels, labels], dim=0)  # (2B,)
 
-        # self_mask[i, i] = True — anchor i must not attend to its own h_G copy
+        # self_mask[i, i] = True -- anchor i must not attend to its own copy in column i
         self_mask = torch.zeros(b, 2 * b, dtype=torch.bool, device=device)
         self_mask[torch.arange(b, device=device), torch.arange(b, device=device)] = True
 
@@ -68,7 +80,7 @@ class MultiPositiveSupConLoss(nn.Module):
         """
         Compute soft negative weights from pairwise config distances.
 
-        ``w_ij = exp(-‖θ_i − θ_j‖ / tau_dist)`` for negative pairs, 0 elsewhere.
+        ``w_ij = exp(-||θ_i - θ_j|| / tau_dist)`` for negative pairs, 0 elsewhere.
         Nearby configs receive a weight close to 1 (soft negatives); distant configs
         receive a weight near 0 (hard negatives).
 
@@ -91,7 +103,7 @@ class MultiPositiveSupConLoss(nn.Module):
 
         For each ``(anchor i, positive p)`` pair::
 
-            loss_ip = -log( exp(sim_ip) / (Σ_{p'} exp(sim_ip') + Σ_n w_in · exp(sim_in)) )
+            loss_ip = -log( exp(sim_ip) / (Σ_{p'} exp(sim_ip') + Σ_n w_in * exp(sim_in)) )
 
         The result is averaged over all valid pairs.
 
@@ -101,8 +113,8 @@ class MultiPositiveSupConLoss(nn.Module):
 
         :returns: Scalar loss tensor.
         """
-        sim_max = sim.detach().max(dim=1, keepdim=True).values  # for exponent numerical stability
-        exp_sim = torch.exp(sim - sim_max)  # subtract row-wise max; dim = (B, 2B)
+        sim_max = sim.detach().max(dim=1, keepdim=True).values  # for numerical stability
+        exp_sim = torch.exp(sim - sim_max)  # subtract row-wise max; (B, 2B)
 
         pos_exp = exp_sim * pos_mask.float()  # (B, 2B)
         neg_exp = exp_sim * neg_weight  # (B, 2B)
@@ -112,6 +124,40 @@ class MultiPositiveSupConLoss(nn.Module):
 
         n_pairs = pos_mask.sum().clamp(min=1)
         return (per_pair_loss * pos_mask.float()).sum() / n_pairs
+
+    def _directional_loss(
+        self,
+        anchors: Tensor,
+        others: Tensor,
+        labels: Tensor,
+        configs: Tensor,
+    ) -> Tensor:
+        """
+        Compute the contrastive loss for one direction: ``anchors`` vs ``[anchors; others]``.
+
+        Both ``anchors`` and ``others`` must already be L2-normalised.
+
+        :param anchors: ``(B, D)`` normalised anchor embeddings.
+        :param others: ``(B, D)`` normalised embeddings forming the cross-modal half of the pool.
+        :param labels: ``(B,)`` integer group indices shared by both modalities.
+        :param configs: ``(B, C)`` normalised parameter vectors for soft negative weighting.
+
+        :returns: Scalar loss tensor.
+        """
+        b = anchors.size(0)
+        all_embeddings = torch.cat([anchors, others], dim=0)  # (2B, D)
+        sim = torch.mm(anchors, all_embeddings.t()) / self.temperature  # (B, 2B)
+
+        pos_mask, self_mask = self._build_masks(labels, b, sim.device)
+
+        if not pos_mask.any():
+            raise ValueError(
+                "MultiPositiveSupConLoss: no valid positives found in this batch. "
+                "Each sample has a distinct label -- contrastive loss is undefined."
+            )
+
+        neg_weight = self._negative_weights(configs, pos_mask, self_mask)
+        return self._compute_loss(sim, pos_mask, neg_weight)
 
     def forward(
         self,
@@ -123,33 +169,23 @@ class MultiPositiveSupConLoss(nn.Module):
         """
         Compute the multi-positive supervised contrastive loss.
 
-        :param graph_embeddings: ``(B, D)`` graph embeddings ``h_G``; these are the anchors.
-        :param config_embeddings: ``(B, D)`` config embeddings ``h_θ``; positives/negatives.
+        :param graph_embeddings: ``(B, D)`` graph embeddings ``h_G``; anchors in the forward
+            direction.
+        :param config_embeddings: ``(B, D)`` config embeddings ``h_θ``; anchors in the reverse
+            direction when ``bidirectional=True``.
         :param labels: ``(B,)`` integer group index; ``graph_embeddings[i]`` and
             ``config_embeddings[i]`` share ``labels[i]``.
         :param configs: ``(B, C)`` normalised parameter vectors used for negative soft-weighting.
 
         :returns: Scalar loss tensor with ``requires_grad=True``.
         """
-        b = graph_embeddings.size(0)
-
         z_g = F.normalize(graph_embeddings, dim=-1)
         z_theta = F.normalize(config_embeddings, dim=-1)
-        all_embeddings = torch.cat([z_g, z_theta], dim=0)  # (2B, D)
 
-        sim = torch.mm(z_g, all_embeddings.t()) / self.temperature  # (B, 2B)
-
-        pos_mask, self_mask = self._build_masks(labels, b, sim.device)
-
-        if not pos_mask.any():
-            raise ValueError(
-                "MultiPositiveSupConLoss: no valid positives found in this batch. "
-                "Each sample has a distinct label — contrastive loss is undefined."
-            )
-
-        neg_weight = self._negative_weights(configs, pos_mask, self_mask)
-
-        return self._compute_loss(sim, pos_mask, neg_weight)
+        loss = self._directional_loss(z_g, z_theta, labels, configs)
+        if self.bidirectional:
+            loss = loss + self._directional_loss(z_theta, z_g, labels, configs)
+        return loss
 
 
 class ABCDConstraintPenaltyLoss(nn.Module):
@@ -164,11 +200,11 @@ class ABCDConstraintPenaltyLoss(nn.Module):
     Per-feature range penalties ensure every predicted feature stays within ``[0, 1]``.
     Cross-parameter ordering penalties enforce the structural ABCD constraints:
 
-    - ``c_min ≤ c_max``
-    - ``d_min ≤ d_max``
-    - ``c_max ≤ n``
-    - ``d_max ≤ n``
-    - ``nout ≤ n``
+    - ``c_min <= c_max``
+    - ``d_min <= d_max``
+    - ``c_max <= n``
+    - ``d_max <= n``
+    - ``nout <= n``
 
     .. note::
         ``n`` (index 0) is exempt from the above-range penalty (``> 1`` in normalised space)
@@ -197,7 +233,7 @@ class ABCDConstraintPenaltyLoss(nn.Module):
         mse = F.mse_loss(x_hat, target)
 
         # Per-feature range: each feature should lie in [0, 1].
-        # n (idx 0) is exempt from the above-range check — the model may predict n > n_max
+        # n (idx 0) is exempt from the above-range check -- the model may predict n > n_max
         # in edge cases with larger networks, which we do not want to penalise.
         below = F.relu(-x_hat)
         above = F.relu(x_hat[:, 1:] - 1.0)  # features 1-8 only
