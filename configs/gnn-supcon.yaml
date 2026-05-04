@@ -65,6 +65,6 @@ training:
       mode: min
       patience: 20
     - name: gradient_accumulation_scheduler
-      gradient_scheduling: 4
+      gradient_scheduling: 4 # effective batch = gradient_scheduling * batch_size = 4 * 16 = 64
     - name: model_summary
       max_depth: -1

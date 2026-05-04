@@ -3,7 +3,6 @@
 from typing import cast
 from unittest.mock import MagicMock
 
-import lightning.pytorch as pl
 import torch
 import torch.nn as nn
 import wandb
@@ -13,9 +12,10 @@ from torch import Tensor
 
 from dcba.dataset import ABCDConfigScaler
 from dcba.dataset.transforms import ABCD_CONFIG_KEYS
+from dcba.wrappers.base import DCBABaseWrapper
 
 
-class DCBASupConWrapper(pl.LightningModule):
+class DCBASupConWrapper(DCBABaseWrapper):
     """
     LightningModule for joint training of graph and config encoders.
 
@@ -66,11 +66,6 @@ class DCBASupConWrapper(pl.LightningModule):
         self._scaler = scaler
         self._test_rows: list[tuple[list[float], list[float], list[float]]] = []
 
-    def _unpack_batch(self, batch: DCBAHeteroData) -> tuple[Tensor, DCBAHeteroData, Tensor]:
-        config = batch.config.reshape(batch.batch_size, -1)
-        target = batch.y.reshape(batch.batch_size, -1)
-        return config, batch, target
-
     @staticmethod
     def _instance_labels(instance_ids: list[str], device: torch.device) -> Tensor:
         """
@@ -92,28 +87,17 @@ class DCBASupConWrapper(pl.LightningModule):
         z_g, _ = self._graph_encoder((config, graph))
         z_theta, theta_hat = self._config_encoder((config, graph))
 
-        labels = self._instance_labels(batch.instance_id, device=z_g.device)
+        labels = self._instance_labels(cast(list[str], batch.instance_id), device=z_g.device)
 
         l_reg = self._reg_loss(theta_hat, target)
         l_supcon = self._supcon_loss(z_g, z_theta, labels, config)
         loss = l_reg + self._lambda_supcon * l_supcon
 
-        self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=graph.batch_size)
-        self.log(f"{stage}_l_reg", l_reg, batch_size=graph.batch_size)
-        self.log(f"{stage}_l_supcon", l_supcon, batch_size=graph.batch_size)
+        batch_size = cast(int, graph.batch_size)
+        self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch_size)
+        self.log(f"{stage}_l_reg", l_reg, batch_size=batch_size)
+        self.log(f"{stage}_l_supcon", l_supcon, batch_size=batch_size)
         return loss
-
-    def training_step(self, batch: DCBAHeteroData, batch_idx: int) -> Tensor:
-        """Compute and log training loss."""
-        return self._step(batch, "train")
-
-    def validation_step(self, batch: DCBAHeteroData, batch_idx: int) -> None:
-        """Compute and log validation loss."""
-        self._step(batch, "val")
-
-    def on_test_epoch_start(self) -> None:
-        """Reset the per-sample accumulator."""
-        self._test_rows = []
 
     def test_step(self, batch: DCBAHeteroData, batch_idx: int) -> None:
         """Compute and log test loss; accumulate per-sample rows for the prediction table."""
@@ -165,15 +149,3 @@ class DCBASupConWrapper(pl.LightningModule):
             rows.append([f"{i}-c"] + cross)
         table = wandb.Table(columns=columns, data=rows)
         self.logger.experiment.log({"test/predictions": table})
-
-    def set_scaler(self, scaler: ABCDConfigScaler | None) -> None:
-        """Set the scaler used to inverse-transform tensors before test logging."""
-        self._scaler = scaler
-
-    def configure_optimizers(self) -> torch.optim.Optimizer:
-        """Build and return an AdamW optimiser over both encoders."""
-        return torch.optim.AdamW(
-            list(self._graph_encoder.parameters()) + list(self._config_encoder.parameters()),
-            lr=self._optimizer_config.get("lr", 1e-3),
-            weight_decay=self._optimizer_config.get("weight_decay", 1e-5),
-        )

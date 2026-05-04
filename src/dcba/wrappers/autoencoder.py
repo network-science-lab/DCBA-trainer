@@ -3,7 +3,6 @@
 from typing import cast
 from unittest.mock import MagicMock
 
-import lightning.pytorch as pl
 import torch
 import torch.nn as nn
 import wandb
@@ -13,9 +12,10 @@ from torch import Tensor
 
 from dcba.dataset import ABCDConfigScaler
 from dcba.dataset.transforms import ABCD_CONFIG_KEYS
+from dcba.wrappers.base import DCBABaseWrapper
 
 
-class DCBAAutoencoderWrapper(pl.LightningModule):
+class DCBAAutoencoderWrapper(DCBABaseWrapper):
     """
     LightningModule for Phase 1: trains the config autoencoder in isolation.
 
@@ -60,37 +60,12 @@ class DCBAAutoencoderWrapper(pl.LightningModule):
         """
         return self._encoder(x)
 
-    def _unpack_batch(self, batch: DCBAHeteroData) -> tuple[Tensor, DCBAHeteroData, Tensor]:
-        config = batch.config.reshape(batch.batch_size, -1)
-        target = batch.y.reshape(batch.batch_size, -1)
-        return config, batch, target
-
     def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
         config, graph, target = self._unpack_batch(batch)
         _, x_hat = self._encoder((config, graph))
         loss = self._loss_fn(x_hat, target)
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=graph.batch_size)
         return loss
-
-    def training_step(
-        self,
-        batch: DCBAHeteroData,
-        batch_idx: int,
-    ) -> Tensor:
-        """Compute and log training loss."""
-        return self._step(batch, "train")
-
-    def validation_step(
-        self,
-        batch: DCBAHeteroData,
-        batch_idx: int,
-    ) -> None:
-        """Compute and log validation loss."""
-        self._step(batch, "val")
-
-    def on_test_epoch_start(self) -> None:
-        """Reset the per-sample reconstruction accumulator."""
-        self._test_rows = []
 
     def test_step(
         self,
@@ -134,15 +109,3 @@ class DCBAAutoencoderWrapper(pl.LightningModule):
             rows.append([f"{i}-r"] + recon)
         table = wandb.Table(columns=columns, data=rows)
         self.logger.experiment.log({"test/reconstructions": table})
-
-    def set_scaler(self, scaler: ABCDConfigScaler | None) -> None:
-        """Set the scaler used to inverse-transform tensors before test logging."""
-        self._scaler = scaler
-
-    def configure_optimizers(self) -> torch.optim.Optimizer:
-        """Build and return an AdamW optimiser."""
-        return torch.optim.AdamW(
-            self.parameters(),
-            lr=self._optimizer_config.get("lr", 1e-3),
-            weight_decay=self._optimizer_config.get("weight_decay", 1e-5),
-        )
