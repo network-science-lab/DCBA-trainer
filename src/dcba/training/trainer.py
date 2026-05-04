@@ -1,4 +1,4 @@
-"""Training entry point — orchestrates Lightning Trainer, datamodule, and wrapper."""
+"""Training entry point -- orchestrates Lightning Trainer, datamodule, and wrapper."""
 
 from pathlib import Path
 
@@ -6,26 +6,43 @@ import lightning.pytorch as pl
 import torch.nn as nn
 
 from dcba.datamodule import ABCDDataModule
-from dcba.models.config_encoder import ConfigEncoder
-from dcba.models.graph_encoder import GraphEncoder
+from dcba.models.config_autoencoder import ConfigAutoEncoder
+from dcba.models.gin_encoder import GINEncoder
 from dcba.training.callbacks import get_callbacks
 from dcba.training.loggers import get_logger
-from dcba.training.loss import ABCDConstraintPenaltyLoss
-from dcba.wrapper import DCBAAutoencoderWrapper
+from dcba.training.loss import ABCDConstraintPenaltyLoss, MultiPositiveSupConLoss
+from dcba.wrappers import DCBAAutoencoderWrapper, DCBASupConWrapper
 
 _WRAPPERS = {
     "config_autoencoder": DCBAAutoencoderWrapper,
+    "supcon": DCBASupConWrapper,
 }
 
 _MODELS = {
-    "ConfigEncoder": ConfigEncoder,
-    "GraphEncoder": GraphEncoder,
+    "ConfigAutoEncoder": ConfigAutoEncoder,
+    "GINEncoder": GINEncoder,
 }
 
 _LOSSES: dict[str, type[nn.Module]] = {
     "mse": nn.MSELoss,
     "abcd_constraint": ABCDConstraintPenaltyLoss,
+    "supcon": MultiPositiveSupConLoss,
 }
+
+
+def _build_model(model_cfg: dict) -> nn.Module:
+    """
+    Instantiate a model from a config dict.
+
+    :param model_cfg: Dict with ``cls`` (str) and constructor kwargs.
+
+    :returns: A model instance.
+    """
+    model_cfg = dict(model_cfg)
+    name = model_cfg.pop("cls")
+    if name not in _MODELS:
+        raise ValueError(f"Unknown model class '{name}'. Available: {list(_MODELS)}")
+    return _MODELS[name](**model_cfg)
 
 
 def _build_loss(loss_cfg: dict) -> nn.Module:
@@ -55,12 +72,8 @@ def train(config: dict) -> None:
     """
     logger = get_logger(config)
 
-    model_cfg = config["model"]
-    model_name = config["training"]["model_cls"]
-    if model_name not in _MODELS:
-        raise ValueError(f"Unknown model class '{model_name}'. Available: {list(_MODELS)}")
-    model_cls = _MODELS[model_name]
-    encoder = model_cls(**model_cfg)
+    training_cfg = config["training"]
+    wrapper_name = training_cfg["wrapper"]
 
     data_cfg = config["data"]
     datamodule = ABCDDataModule(
@@ -70,33 +83,47 @@ def train(config: dict) -> None:
         test_ratio=data_cfg["test_ratio"],
         batch_size=data_cfg["batch_size"],
         num_workers=data_cfg["num_workers"],
-        single_replica_per_instance=True if model_name == "ConfigEncoder" else False,
+        single_replica_per_instance=wrapper_name == "config_autoencoder",
         seed=config.get("random_seed", 42),
     )
 
-    loss_fn = _build_loss(config["training"]["loss"])
-
-    wrapper_name = config["training"]["wrapper"]
-    if wrapper_name not in _WRAPPERS:
+    if wrapper_name == "config_autoencoder":
+        encoder = _build_model(next(iter(config["models"].values())))
+        loss_fn = _build_loss(next(iter(training_cfg["losses"].values())))
+        wrapper: pl.LightningModule = DCBAAutoencoderWrapper(
+            encoder,
+            training_cfg["optimizer"]["args"],
+            loss_fn=loss_fn,
+        )
+    elif wrapper_name == "supcon":
+        losses_cfg = training_cfg["losses"]
+        reg_loss = _build_loss(losses_cfg["reg"])
+        supcon_loss = _build_loss(losses_cfg["repr"])
+        graph_encoder = _build_model(config["models"]["graph"])
+        config_encoder = _build_model(config["models"]["theta"])
+        wrapper = DCBASupConWrapper(
+            graph_encoder=graph_encoder,
+            config_encoder=config_encoder,
+            optimizer_config=training_cfg["optimizer"]["args"],
+            reg_loss=reg_loss,
+            supcon_loss=supcon_loss,
+            lambda_supcon=losses_cfg["repr"].get("weight", 1.0),
+        )
+    else:
         raise ValueError(f"Unknown wrapper '{wrapper_name}'. Available: {list(_WRAPPERS)}")
-    wrapper = _WRAPPERS[wrapper_name](
-        encoder,
-        config["training"]["optimizer"]["args"],
-        loss_fn=loss_fn,
-    )
 
     logger.log_hyperparams({key: value for key, value in config.items() if key != "hydra"})
     logger.watch(wrapper)
     trainer = pl.Trainer(
-        max_epochs=config["training"]["max_epochs"],
-        accelerator=config["training"]["accelerator"],
-        devices=config["training"]["devices"],
+        max_epochs=training_cfg["max_epochs"],
+        accelerator=training_cfg["accelerator"],
+        devices=training_cfg["devices"],
         log_every_n_steps=1,
         callbacks=get_callbacks(config),
         logger=logger,
     )
     trainer.fit(wrapper, datamodule=datamodule)
-    wrapper._scaler = datamodule.scaler
+    wrapper.set_scaler(datamodule.scaler)
     metrics = trainer.test(wrapper, datamodule=datamodule)
     for i in Path(f"{config['hydra']['runtime']['output_dir']}/checkpoints").iterdir():
         logger.experiment.log_artifact(

@@ -1,21 +1,21 @@
-"""Config encoder module — MLP autoencoder for ABCD configuration vectors."""
+"""Config autoencoder module — MLP autoencoder for ABCD configuration vectors."""
 
 import torch.nn as nn
 from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from torch import Tensor
 
 
-class ConfigEncoder(nn.Module):
+class ConfigAutoEncoder(nn.Module):
     """
-    Parametrisable MLP autoencoder that maps a config vector ``q`` to an embedding ``h_q``.
+    Parametrisable MLP autoencoder that maps a config vector ``theta`` to an embedding ``z_theta``.
 
-    The encoder projects ``input_dim → hidden_dims[0] → … → embedding_dim`` with ReLU
+    The encoder projects ``input_dim -> hidden_dims[0] -> ... -> embedding_dim`` with ReLU
     activations between layers.  The decoder mirrors the encoder in reverse with no
     activation on the output layer, so reconstructed values are unconstrained reals.
 
     :param input_dim: Dimensionality of the input config vector (e.g. 9 for ABCD).
     :param hidden_dims: Sizes of intermediate hidden layers shared by encoder and decoder.
-    :param embedding_dim: Dimensionality of the bottleneck embedding ``h_q``.
+    :param embedding_dim: Dimensionality of the bottleneck embedding ``z_theta``.
     """
 
     def __init__(
@@ -53,27 +53,27 @@ class ConfigEncoder(nn.Module):
         """
         return self._encoder(x)
 
-    def decode(self, h: Tensor) -> Tensor:
+    def decode(self, z: Tensor) -> Tensor:
         """
         Reconstruct a config vector from its embedding.
 
-        :param h: Embedding tensor of shape ``(batch, embedding_dim)``.
+        :param z: Embedding tensor of shape ``(batch, embedding_dim)``.
 
         :returns: Reconstructed tensor of shape ``(batch, input_dim)``.
         """
-        return self._decoder(h)
+        return self._decoder(z)
 
     def forward(self, x: tuple[Tensor, DCBAHeteroData]) -> tuple[Tensor, Tensor]:
         """
         Run the full autoencoder pass.
 
-        :param x: Tuple of a float tensor Float tensor of shape ``(batch, input_dim)``
-        and DCBAHeteroData.
+        :param x: Tuple of ``(config, graph)`` where ``config`` is a float tensor of shape
+            ``(batch, input_dim)`` and ``graph`` is :class:`DCBAHeteroData` (unused).
 
-        :returns: Tuple ``(h_q, x_hat)`` where ``h_q`` is the embedding and
-            ``x_hat`` is the reconstruction.
+        :returns: Tuple ``(z_theta, theta_hat)`` where ``z_theta`` is the embedding and
+            ``theta_hat`` is the reconstruction.
         """
-        _x, _ = x
-        h_q = self.encode(_x)
-        x_hat = self.decode(h_q)
-        return h_q, x_hat
+        config, _ = x
+        z_theta = self.encode(config)
+        theta_hat = self.decode(z_theta)
+        return z_theta, theta_hat

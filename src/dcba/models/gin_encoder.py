@@ -1,4 +1,4 @@
-"""Graph encoder module — Phase 2 stub."""
+"""GIN-based graph encoder with a config-prediction head."""
 
 import torch.nn as nn
 from dcba_data_set.graph_io.data_models import DCBAHeteroData
@@ -7,7 +7,7 @@ from torch_geometric.nn import GINConv, Sequential, global_mean_pool
 
 
 class LayerwiseAggregation(nn.Module):
-    """Auxuilary class for trainable custom aggregation of mln-layers embeddings."""
+    """Auxiliary class for trainable custom aggregation of mln-layers embeddings."""
 
     def __init__(self, hidden_channels: int) -> None:
         """Initialise the object."""
@@ -18,18 +18,31 @@ class LayerwiseAggregation(nn.Module):
         """
         Trainable aggregation of mln layers' embeddings.
 
-        :param h: mln layers' embeddings dict `{nb_mln_layers: [hidden_dim, nb_mln_actors]}`
-        :return: a tensor of shape `[hidden_dim, nb_mln_actors]`
+        :param h: mln layers' embeddings dict ``{nb_mln_layers: [hidden_dim, nb_mln_actors]}``.
+
+        :returns: A tensor of shape ``[hidden_dim, nb_mln_actors]``.
         """
-        h = stack(list(h.values()))
-        attn_scores = self.attn(h)
+        stacked = stack(list(h.values()))
+        attn_scores = self.attn(stacked)
         attn_scores = nn.functional.softmax(attn_scores, dim=0)
-        weighted_sum = (attn_scores * h).sum(dim=0)
-        return weighted_sum
+        return (attn_scores * stacked).sum(dim=0)
 
 
-class GraphEncoder(nn.Module):
-    """Graph encoder that maps a graph to a latent embedding ``h_g``."""
+class GINEncoder(nn.Module):
+    """
+    GIN-based graph encoder that maps a graph to an embedding ``z_g`` and predicts ``theta_hat``.
+
+    No representation constraint is applied -- this is the regression baseline used in Stage 1
+    as part of the joint ``L_reg + lambda * L_SupCon`` objective. Produces an embedding suitable
+    for contrastive learning when paired with
+    :class:`~dcba.models.config_autoencoder.ConfigAutoEncoder`.
+
+    :param input_dim: Node feature dimensionality.
+    :param hidden_dims: Sizes of intermediate GIN layers.
+    :param embedding_dim: Dimensionality of the graph embedding ``z_g``.
+    :param output_dim: Dimensionality of the predicted config vector (e.g. 9 for ABCD).
+    :param dropout: Dropout probability applied after each GIN layer.
+    """
 
     def __init__(
         self,
@@ -70,9 +83,9 @@ class GraphEncoder(nn.Module):
 
     def encode(self, data: DCBAHeteroData) -> Tensor:
         """
-        Map a config vector to its embedding.
+        Compute graph embedding ``z_g`` from a batch of heterogeneous graphs.
 
-        :param x: DCBAHeteroData.
+        :param data: Batched heterogeneous graph data.
 
         :returns: Embedding tensor of shape ``(batch, embedding_dim)``.
         """
@@ -84,30 +97,29 @@ class GraphEncoder(nn.Module):
             y_relations[relation] = self._dropout(h)
 
         agg = self._aggregator(y_relations)
-
         return global_mean_pool(agg, batch=data["actor"].batch)
 
-    def decode(self, h: Tensor) -> Tensor:
+    def decode(self, z: Tensor) -> Tensor:
         """
-        Reconstruct a config vector from its embedding.
+        Predict config vector ``theta_hat`` from embedding ``z_g``.
 
-        :param h: Embedding tensor of shape ``(batch, embedding_dim)``.
+        :param z: Embedding tensor of shape ``(batch, embedding_dim)``.
 
-        :returns: Reconstructed tensor of shape ``(batch, input_dim)``.
+        :returns: Predicted config tensor of shape ``(batch, output_dim)``.
         """
-        return self._decoder(h)
+        return self._decoder(z)
 
     def forward(self, x: tuple[Tensor, DCBAHeteroData]) -> tuple[Tensor, Tensor]:
         """
-        Run the full autoencoder pass.
+        Run the full graph-to-config forward pass.
 
-        :param x: Tuple of a float tensor Float tensor of shape ``(batch, input_dim)``
-        and DCBAHeteroData.
+        :param x: Tuple of ``(config, graph)`` where ``config`` is a float tensor of shape
+            ``(batch, input_dim)`` (unused) and ``graph`` is :class:`DCBAHeteroData`.
 
-        :returns: Tuple ``(h_q, x_hat)`` where ``h_q`` is the embedding and
-            ``x_hat`` is the reconstruction.
+        :returns: Tuple ``(z_g, theta_hat)`` where ``z_g`` is the graph embedding and
+            ``theta_hat`` is the predicted config vector.
         """
-        _, _x = x
-        h_q = self.encode(_x)
-        x_hat = self.decode(h_q)
-        return h_q, x_hat
+        _, graph = x
+        z_g = self.encode(graph)
+        theta_hat = self.decode(z_g)
+        return z_g, theta_hat

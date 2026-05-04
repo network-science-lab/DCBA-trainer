@@ -1,15 +1,8 @@
-"""Lightning wrappers for DCBA training regimes.
-
-Each training regime (Phase 1 autoencoder, Phase 2 joint, …) has its own
-:class:`~lightning.pytorch.LightningModule` subclass.  The :func:`~dcba.training.trainer.train`
-function selects the appropriate wrapper from config, keeping each wrapper focused and
-free of mode-switch flags.
-"""
+"""DCBAAutoencoderWrapper -- single-encoder training regime (autoencoder or regression)."""
 
 from typing import cast
 from unittest.mock import MagicMock
 
-import lightning.pytorch as pl
 import torch
 import torch.nn as nn
 import wandb
@@ -19,9 +12,10 @@ from torch import Tensor
 
 from dcba.dataset import ABCDConfigScaler
 from dcba.dataset.transforms import ABCD_CONFIG_KEYS
+from dcba.wrappers.base import DCBABaseWrapper
 
 
-class DCBAAutoencoderWrapper(pl.LightningModule):
+class DCBAAutoencoderWrapper(DCBABaseWrapper):
     """
     LightningModule for Phase 1: trains the config autoencoder in isolation.
 
@@ -30,7 +24,8 @@ class DCBAAutoencoderWrapper(pl.LightningModule):
     per-sample reconstruction rows and logs them as a wandb Table.
 
     :param encoder: The :class: `nn.Module` to train. In practice it will be
-        `~dcba.models.config_encoder.ConfigEncoder` or `~dcba.models.graph_encoder.GraphEncoder`
+        `~dcba.models.config_autoencoder.ConfigAutoEncoder` or
+        `~dcba.models.gin_encoder.GINEncoder`
     :param optimizer_config: AdamW hyperparameters dict, expected keys ``lr`` and
         ``weight_decay``.
     :param scaler: Optional scaler used to inverse-transform normalised tensors back
@@ -65,37 +60,12 @@ class DCBAAutoencoderWrapper(pl.LightningModule):
         """
         return self._encoder(x)
 
-    def _unpack_batch(self, batch: DCBAHeteroData) -> tuple[Tensor, DCBAHeteroData, Tensor]:
-        config = batch.config.reshape(batch.batch_size, -1)
-        target = batch.y.reshape(batch.batch_size, -1)
-        return config, batch, target
-
     def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
         config, graph, target = self._unpack_batch(batch)
         _, x_hat = self._encoder((config, graph))
         loss = self._loss_fn(x_hat, target)
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=graph.batch_size)
         return loss
-
-    def training_step(
-        self,
-        batch: DCBAHeteroData,
-        batch_idx: int,
-    ) -> Tensor:
-        """Compute and log training loss."""
-        return self._step(batch, "train")
-
-    def validation_step(
-        self,
-        batch: DCBAHeteroData,
-        batch_idx: int,
-    ) -> None:
-        """Compute and log validation loss."""
-        self._step(batch, "val")
-
-    def on_test_epoch_start(self) -> None:
-        """Reset the per-sample reconstruction accumulator."""
-        self._test_rows = []
 
     def test_step(
         self,
@@ -107,16 +77,16 @@ class DCBAAutoencoderWrapper(pl.LightningModule):
 
         config, graph, _ = self._unpack_batch(batch)
         with torch.no_grad():
-            _, x_hat = self._encoder((config, graph))
+            _, theta_hat = self._encoder((config, graph))
 
-        x_cpu = config.detach().cpu()
-        x_hat_cpu = x_hat.detach().cpu()
+        config_cpu = config.detach().cpu()
+        recon_cpu = theta_hat.detach().cpu()
 
         if self._scaler is not None:
-            x_cpu = self._scaler.inverse_transform(x_cpu)
-            x_hat_cpu = self._scaler.inverse_transform(x_hat_cpu)
+            config_cpu = self._scaler.inverse_transform(config_cpu)
+            recon_cpu = self._scaler.inverse_transform(recon_cpu)
 
-        for orig, recon in zip(x_cpu.tolist(), x_hat_cpu.tolist(), strict=True):
+        for orig, recon in zip(config_cpu.tolist(), recon_cpu.tolist(), strict=True):
             self._test_rows.append((cast(list[float], orig), cast(list[float], recon)))
 
     def on_test_epoch_end(self) -> None:
@@ -139,11 +109,3 @@ class DCBAAutoencoderWrapper(pl.LightningModule):
             rows.append([f"{i}-r"] + recon)
         table = wandb.Table(columns=columns, data=rows)
         self.logger.experiment.log({"test/reconstructions": table})
-
-    def configure_optimizers(self) -> torch.optim.Optimizer:
-        """Build and return an AdamW optimiser."""
-        return torch.optim.AdamW(
-            self.parameters(),
-            lr=self._optimizer_config.get("lr", 1e-3),
-            weight_decay=self._optimizer_config.get("weight_decay", 1e-5),
-        )

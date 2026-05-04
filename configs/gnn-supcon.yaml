@@ -6,35 +6,44 @@ random_seed: 42
 
 data:
   report_path: "abcd-interim/report.json"
-  # report_path: "test/dataset_abcd/report.json"
   n_max: 10000 # upper bound for all node-count-dependent scaler features
   val_ratio: 0.15
   test_ratio: 0.15
-  batch_size: 8
+  batch_size: 16 # small enough for interim dataset; scale to ~256 (K>=32 configs x N graphs) for production
   num_workers: 0
 
 models:
+  graph:
+    cls: GINEncoder
+    input_dim: 1
+    hidden_dims: [64, 128]
+    embedding_dim: 32
+    output_dim: 9
   theta:
     cls: ConfigAutoEncoder
     input_dim: 9
     hidden_dims: [64]
-    embedding_dim: 32
+    embedding_dim: 32 # must match models.graph.embedding_dim
 
 training:
-  wrapper: config_autoencoder
+  wrapper: supcon
   accelerator: gpu
   devices: [0]
   max_epochs: 100
   losses:
+    # reg:
+    #   name: mse
+    #   args: {}
     reg:
-      name: mse
-      args: {}
-  # To use the constraint-penalty loss:
-  # losses:
-  #   reg:
-  #     name: abcd_constraint
-  #     args:
-  #       lambda_penalty: 1.0
+      name: abcd_constraint
+      args:
+        lambda_penalty: 1.0
+    repr:
+      name: supcon
+      weight: 1.0
+      args:
+        temperature: 0.07
+        tau_dist: 1.0
   optimizer:
     name: AdamW
     args:
@@ -42,8 +51,8 @@ training:
       weight_decay: 0.00001
   logger:
     project: dcba
-    name: config-autoencoder
-    tags: [phase-1]
+    name: stage1-supcon
+    tags: [stage-1, supcon]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss
@@ -55,5 +64,7 @@ training:
       monitor: val_loss
       mode: min
       patience: 20
+    - name: gradient_accumulation_scheduler
+      gradient_scheduling: 4 # effective batch = gradient_scheduling * batch_size = 4 * 16 = 64
     - name: model_summary
       max_depth: -1
