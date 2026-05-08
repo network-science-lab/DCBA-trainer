@@ -3,7 +3,7 @@
 import torch.nn as nn
 from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from torch import Tensor, stack
-from torch_geometric.nn import GINConv, GlobalAttention, Sequential
+from torch_geometric.nn import GINConv, AttentionalAggregation, Sequential
 
 
 class LayerwiseAggregation(nn.Module):
@@ -72,7 +72,7 @@ class GINEncoder(nn.Module):
         self._encoder = Sequential("x, edge_index", layers)
         self._dropout = nn.Dropout(dropout)
         self._aggregator = LayerwiseAggregation(embedding_dim)
-        self._pool = GlobalAttention(gate_nn=nn.Linear(embedding_dim, 1))
+        self._pool = AttentionalAggregation(gate_nn=nn.Linear(embedding_dim, 1))
 
         dec_dims = [embedding_dim] + list(reversed(hidden_dims)) + [output_dim]
         dec_layers: list[nn.Module] = []

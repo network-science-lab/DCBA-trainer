@@ -4,7 +4,6 @@ from pathlib import Path
 
 import lightning.pytorch as pl
 import torch.nn as nn
-from lightning.pytorch.strategies import DDPStrategy, Strategy
 
 from dcba.datamodule import ABCDDataModule
 from dcba.models.config_autoencoder import ConfigAutoEncoder
@@ -13,11 +12,6 @@ from dcba.training.callbacks import get_callbacks
 from dcba.training.loggers import get_logger
 from dcba.training.loss import ABCDConstraintPenaltyLoss, MultiPositiveSupConLoss
 from dcba.wrappers import DCBAAutoencoderWrapper, DCBASupConWrapper
-
-_STRATEGIES: dict[str, type[Strategy]] = {
-    "ddp": DDPStrategy,
-}
-
 
 _WRAPPERS = {
     "config_autoencoder": DCBAAutoencoderWrapper,
@@ -34,31 +28,6 @@ _LOSSES: dict[str, type[nn.Module]] = {
     "abcd_constraint": ABCDConstraintPenaltyLoss,
     "supcon": MultiPositiveSupConLoss,
 }
-
-
-def _build_strategy(strategy_cfg: str | dict) -> str | Strategy:
-    """
-    Instantiate a Lightning training strategy from a config value.
-
-    Pass a plain string (e.g. ``"auto"``) to use it as-is, or a dict with a ``name`` key and
-    optional constructor kwargs (e.g. ``{name: ddp, find_unused_parameters: false}``) to
-    instantiate a :class:`~lightning.pytorch.strategies.Strategy` subclass.
-
-    ``find_unused_parameters: false`` is required when gradient checkpointing is active:
-    DDP's default graph traversal incorrectly marks checkpointed parameters as
-    unused, which causes an error during the first backward pass.
-
-    :param strategy_cfg: Either a strategy name string or a dict with ``name`` and kwargs.
-
-    :returns: A string strategy identifier or an instantiated :class:`Strategy` object.
-    """
-    if isinstance(strategy_cfg, str):
-        return strategy_cfg
-    cfg = dict(strategy_cfg)
-    name = cfg.pop("name")
-    if name not in _STRATEGIES:
-        raise ValueError(f"Unknown strategy '{name}'. Available: {list(_STRATEGIES)}")
-    return _STRATEGIES[name](**cfg)
 
 
 def _build_model(model_cfg: dict) -> nn.Module:
@@ -143,19 +112,12 @@ def train(config: dict) -> None:
     else:
         raise ValueError(f"Unknown wrapper '{wrapper_name}'. Available: {list(_WRAPPERS)}")
 
-    devices = training_cfg["devices"]
-    n_devices = len(devices) if isinstance(devices, list) else int(devices)
-    extra = {
-        "effective_batch_size": config["data"]["batch_size"] * n_devices,
-        "n_devices": n_devices,
-    }
-    logger.log_hyperparams({**{k: v for k, v in config.items() if k != "hydra"}, **extra})
+    logger.log_hyperparams({k: v for k, v in config.items() if k != "hydra"})
     logger.watch(wrapper)
     trainer = pl.Trainer(
         max_epochs=training_cfg["max_epochs"],
         accelerator=training_cfg["accelerator"],
         devices=training_cfg["devices"],
-        strategy=_build_strategy(training_cfg.get("strategy", "auto")),
         log_every_n_steps=1,
         callbacks=get_callbacks(config),
         logger=logger,
