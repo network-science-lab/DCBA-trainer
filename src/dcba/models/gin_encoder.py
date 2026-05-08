@@ -3,7 +3,7 @@
 import torch.nn as nn
 from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from torch import Tensor, stack
-from torch_geometric.nn import GINConv, Sequential, global_mean_pool
+from torch_geometric.nn import GINConv, GlobalAttention, Sequential
 
 
 class LayerwiseAggregation(nn.Module):
@@ -72,6 +72,7 @@ class GINEncoder(nn.Module):
         self._encoder = Sequential("x, edge_index", layers)
         self._dropout = nn.Dropout(dropout)
         self._aggregator = LayerwiseAggregation(embedding_dim)
+        self._pool = GlobalAttention(gate_nn=nn.Linear(embedding_dim, 1))
 
         dec_dims = [embedding_dim] + list(reversed(hidden_dims)) + [output_dim]
         dec_layers: list[nn.Module] = []
@@ -97,7 +98,7 @@ class GINEncoder(nn.Module):
             y_relations[relation] = self._dropout(h)
 
         agg = self._aggregator(y_relations)
-        return global_mean_pool(agg, batch=data["actor"].batch)
+        return self._pool(agg, batch=data["actor"].batch)
 
     def decode(self, z: Tensor) -> Tensor:
         """
