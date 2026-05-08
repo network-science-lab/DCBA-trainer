@@ -45,15 +45,16 @@ class ABCDDataset(Dataset):
         """Initialise the dataset, eagerly converting config records to tensors."""
         super().__init__()
         to_tensor = ABCDConfigToTensor()
-        self._replicas: list[tuple[ReplicaRecord, str, str]] = []
+        self._replicas: list[tuple[ReplicaRecord, str, str, str]] = []
         self._tensors: list[Tensor] = []
 
         for record in records:
             config = DCBAInstanceConfig.from_instance_record(record)
+            config_yaml = record.config_path.read_text(encoding="utf-8")
             t = scaler(to_tensor(config)) if scaler is not None else to_tensor(config)
             replica_list = record.replicas[:1] if single_replica_per_instance else record.replicas
             for replica in replica_list:
-                self._replicas.append((replica, record.instance_id, record.net_type))
+                self._replicas.append((replica, record.instance_id, record.net_type, config_yaml))
                 self._tensors.append(t)
 
     @classmethod
@@ -86,8 +87,8 @@ class ABCDDataset(Dataset):
         :returns: A :class:`~dcba_data_set.graph_io.data_models.DCBAHeteroData` with config
             tensor attached as ``.config`` and ``.y``.
         """
-        replica, instance_id, net_type = self._replicas[idx]
-        g = DCBAHeteroData.from_replica_record(replica, instance_id, net_type)
+        replica, instance_id, net_type, config_yaml = self._replicas[idx]
+        g = DCBAHeteroData.from_replica_record(replica, instance_id, net_type, config_yaml)
         t = self._tensors[idx]
         g["actor"].x = zeros((len(g.actors_map), 5))
         g.config = t
