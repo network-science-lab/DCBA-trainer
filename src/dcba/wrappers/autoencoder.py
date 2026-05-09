@@ -12,6 +12,7 @@ from torch import Tensor
 
 from dcba.dataset import ABCDConfigScaler
 from dcba.dataset.transforms import ABCD_CONFIG_KEYS
+from dcba.models.types import EncoderOutput
 from dcba.wrappers.base import DCBABaseWrapper
 
 
@@ -50,21 +51,22 @@ class DCBAAutoencoderWrapper(DCBABaseWrapper):
         self._loss_fn = loss_fn if loss_fn is not None else nn.MSELoss()
         self._test_rows: list[tuple[list[float], list[float]]] = []
 
-    def forward(self, x: tuple[Tensor, DCBAHeteroData]) -> tuple[Tensor, Tensor]:
+    def forward(self, batch: DCBAHeteroData) -> EncoderOutput:
         """
         Run the encoder forward pass.
 
-        :param x: Input graph DCBAHeteroData & config tensor of shape ``(batch, input_dim)``.
+        :param batch: Batched heterogeneous graph data.
 
-        :returns: Tuple ``(h_q, x_hat)``.
+        :returns: :class:`~dcba.models.types.EncoderOutput` from the wrapped encoder.
         """
-        return self._encoder(x)
+        return self._encoder(batch)
 
     def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
-        config, graph, target = self._unpack_batch(batch)
-        _, x_hat = self._encoder((config, graph))
+        _, _, target = self._unpack_batch(batch)
+        out = self._encoder(batch)
+        x_hat = out.reconstruction
         loss = self._loss_fn(x_hat, target)
-        self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=graph.batch_size)
+        self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch.batch_size)
         return loss
 
     def test_step(
@@ -75,9 +77,10 @@ class DCBAAutoencoderWrapper(DCBABaseWrapper):
         """Compute and log test loss; accumulate per-sample reconstruction rows."""
         self._step(batch, "test")
 
-        config, graph, _ = self._unpack_batch(batch)
+        config, _, _ = self._unpack_batch(batch)
         with torch.no_grad():
-            _, theta_hat = self._encoder((config, graph))
+            out = self._encoder(batch)
+            theta_hat = out.reconstruction
 
         config_cpu = config.detach().cpu()
         recon_cpu = theta_hat.detach().cpu()
