@@ -73,22 +73,6 @@ Training (single GPU):
 uv run dcba-train --config-name base
 ```
 
-Training (multi-GPU):
-
-```bash
-uv run dcba-train --config-name base
-```
-
-Lightning launches the DDP processes automatically via `torchrun`. The `devices` list in the config
-controls which GPUs are used; `LOCAL_RANK` is injected per-process by the launcher and does not need
-to be set manually.
-
-To override the device list at launch time:
-
-```bash
-uv run dcba-train --config-name base training.devices=[0]
-```
-
 Sweep (hyperparameter tuning):
 
 ```bash
