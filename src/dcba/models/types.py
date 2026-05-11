@@ -1,7 +1,6 @@
 """Shared output types for DCBA encoder models."""
 
 from dataclasses import dataclass
-from typing import Optional
 
 from torch import Tensor
 
@@ -18,5 +17,5 @@ class EncoderOutput:
     """
 
     embedding: Tensor
-    reconstruction: Optional[Tensor] = None
-    aux_loss: Optional[Tensor] = None
+    reconstruction: Tensor | None = None
+    aux_loss: Tensor | None = None

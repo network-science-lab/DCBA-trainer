@@ -4,8 +4,10 @@ from pathlib import Path
 
 import lightning.pytorch as pl
 import torch.nn as nn
+from torch_geometric.transforms import BaseTransform
 
 from dcba.datamodule import ABCDDataModule
+from dcba.dataset import ABCDConfig, ABCDConfigScaler, ABCDConfigToTensor
 from dcba.models.config_autoencoder import ConfigAutoEncoder
 from dcba.models.gin_encoder import GINEncoder
 from dcba.training.callbacks import get_callbacks
@@ -29,10 +31,58 @@ _LOSSES: dict[str, type[nn.Module]] = {
     "supcon": MultiPositiveSupConLoss,
 }
 
+_SCALERS: dict[str, type] = {
+    "ABCDConfigScaler": ABCDConfigScaler,
+}
+
+_TRANSFORMS: dict[str, type[BaseTransform]] = {
+    "ABCDConfigToTensor": ABCDConfigToTensor,
+}
+
+_CONFIG_SCHEMAS: dict[str, type] = {
+    "ABCDConfig": ABCDConfig,
+}
+
+
+def _build_scaler(scaler_cfg: dict | None) -> ABCDConfigScaler | None:
+    """
+    Instantiate a scaler from a config dict, or return ``None``.
+
+    :param scaler_cfg: Dict with ``name`` (str) and optional ``args`` (dict) keys, or ``None``
+        to disable scaling.
+
+    :returns: A scaler instance, or ``None`` when ``scaler_cfg`` is ``None``.
+    """
+    if scaler_cfg is None:
+        return None
+    name = scaler_cfg["name"]
+    if name not in _SCALERS:
+        raise ValueError(f"Unknown scaler '{name}'. Available: {list(_SCALERS)}")
+    return _SCALERS[name](**scaler_cfg.get("args", {}))
+
+
+def _build_transform(name: str | None) -> BaseTransform:
+    """
+    Instantiate a config transform from its registry name.
+
+    :param name: Key in :data:`_TRANSFORMS`, or ``None`` to use the default
+        :class:`~dcba.dataset.ABCDConfigToTensor`.
+
+    :returns: A transform instance.
+    """
+    if name is None:
+        return ABCDConfigToTensor()
+    if name not in _TRANSFORMS:
+        raise ValueError(f"Unknown transform '{name}'. Available: {list(_TRANSFORMS)}")
+    return _TRANSFORMS[name]()
+
 
 def _build_model(model_cfg: dict) -> nn.Module:
     """
     Instantiate a model from a config dict.
+
+    If the dict contains a ``config_schema`` key its value is resolved from
+    :data:`_CONFIG_SCHEMAS` (string -> class) before the constructor is called.
 
     :param model_cfg: Dict with ``cls`` (str) and constructor kwargs.
 
@@ -40,6 +90,13 @@ def _build_model(model_cfg: dict) -> nn.Module:
     """
     model_cfg = dict(model_cfg)
     name = model_cfg.pop("cls")
+    if "config_schema" in model_cfg:
+        schema_name = model_cfg["config_schema"]
+        if schema_name not in _CONFIG_SCHEMAS:
+            raise ValueError(
+                f"Unknown config schema '{schema_name}'. Available: {list(_CONFIG_SCHEMAS)}"
+            )
+        model_cfg["config_schema"] = _CONFIG_SCHEMAS[schema_name]
     if name not in _MODELS:
         raise ValueError(f"Unknown model class '{name}'. Available: {list(_MODELS)}")
     return _MODELS[name](**model_cfg)
@@ -76,15 +133,18 @@ def train(config: dict) -> None:
     wrapper_name = training_cfg["wrapper"]
 
     data_cfg = config["data"]
+    scaler = _build_scaler(data_cfg.get("scaler"))
+    transform = _build_transform(data_cfg.get("transform"))
     datamodule = ABCDDataModule(
         report_path=Path(data_cfg["report_path"]),
-        n_max=data_cfg["n_max"],
         val_ratio=data_cfg["val_ratio"],
         test_ratio=data_cfg["test_ratio"],
         batch_size=data_cfg["batch_size"],
         num_workers=data_cfg["num_workers"],
         single_replica_per_instance=wrapper_name == "config_autoencoder",
         seed=config.get("random_seed", 42),
+        scaler=scaler,
+        transform=transform,
     )
 
     if wrapper_name == "config_autoencoder":
@@ -114,6 +174,7 @@ def train(config: dict) -> None:
 
     logger.log_hyperparams({k: v for k, v in config.items() if k != "hydra"})
     logger.watch(wrapper)
+    clip_val = training_cfg.get("gradient_clip_val")
     trainer = pl.Trainer(
         max_epochs=training_cfg["max_epochs"],
         accelerator=training_cfg["accelerator"],
@@ -121,6 +182,8 @@ def train(config: dict) -> None:
         log_every_n_steps=1,
         callbacks=get_callbacks(config),
         logger=logger,
+        gradient_clip_val=clip_val,
+        gradient_clip_algorithm="norm" if clip_val is not None else None,
     )
     trainer.fit(wrapper, datamodule=datamodule)
     wrapper.set_scaler(datamodule.scaler)

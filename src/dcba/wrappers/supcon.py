@@ -1,5 +1,6 @@
 """DCBASupConWrapper -- joint graph + config encoder training with SupCon + regression loss."""
 
+import hashlib
 from typing import cast
 from unittest.mock import MagicMock
 
@@ -70,32 +71,39 @@ class DCBASupConWrapper(DCBABaseWrapper):
     @staticmethod
     def _instance_labels(instance_ids: list[str], device: torch.device) -> Tensor:
         """
-        Convert a list of ``instance_id`` strings into a compact integer label tensor.
+        Convert a list of ``instance_id`` strings into globally consistent integer labels.
+
+        Each string is hashed with SHA-256 so the same ``instance_id`` always maps to the
+        same integer, regardless of what other samples are in the batch.  This is required
+        for correctness when embeddings from different batches are concatenated (e.g. via a
+        memory bank) -- per-batch compact re-indexing would make the same integer refer to
+        different instances across steps, corrupting positive-pair detection.
 
         :param instance_ids: Per-sample instance identifiers as produced by PyG collation.
         :param device: Target device for the output tensor.
 
-        :returns: ``(B,)`` int64 tensor of contiguous group indices.
+        :returns: ``(B,)`` int64 tensor of stable, globally unique group indices.
         """
-        uid_to_idx = {uid: idx for idx, uid in enumerate(sorted(set(instance_ids)))}
-        return torch.tensor(
-            [uid_to_idx[uid] for uid in instance_ids], dtype=torch.long, device=device
-        )
+
+        def _h(s: str) -> int:
+            return int.from_bytes(hashlib.sha256(s.encode()).digest()[:8], "big") >> 1
+
+        return torch.tensor([_h(uid) for uid in instance_ids], dtype=torch.long, device=device)
 
     def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
-        config, graph, target = self._unpack_batch(batch)
+        config = self._unpack_batch(batch)
 
-        z_g = F.normalize(self._graph_encoder.encode(graph), dim=-1)
+        z_g = F.normalize(self._graph_encoder.encode(batch), dim=-1)
         z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
         theta_hat = self._config_encoder.decode(z_theta)
 
         labels = self._instance_labels(cast(list[str], batch.instance_id), device=z_g.device)
 
-        l_reg = self._reg_loss(theta_hat, target)
+        l_reg = self._reg_loss(theta_hat, config)
         l_supcon = self._supcon_loss(z_g, z_theta, labels, config)
         loss = l_reg + self._lambda_supcon * l_supcon
 
-        batch_size = cast(int, graph.batch_size)
+        batch_size = cast(int, batch.batch_size)
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch_size)
         self.log(f"{stage}_l_reg", l_reg, batch_size=batch_size)
         self.log(f"{stage}_l_supcon", l_supcon, batch_size=batch_size)
@@ -103,14 +111,22 @@ class DCBASupConWrapper(DCBABaseWrapper):
 
     def test_step(self, batch: DCBAHeteroData, batch_idx: int) -> None:
         """Compute and log test loss; accumulate per-sample rows for the prediction table."""
-        self._step(batch, "test")
+        config = self._unpack_batch(batch)
 
-        config, graph, _ = self._unpack_batch(batch)
-        with torch.no_grad():
-            z_g = F.normalize(self._graph_encoder.encode(graph), dim=-1)
-            theta_hat_cross = self._config_encoder.decode(z_g)
-            z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
-            theta_hat_recon = self._config_encoder.decode(z_theta)
+        z_g = F.normalize(self._graph_encoder.encode(batch), dim=-1)
+        z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
+        theta_hat_recon = self._config_encoder.decode(z_theta)
+        theta_hat_cross = self._config_encoder.decode(z_g)
+
+        labels = self._instance_labels(cast(list[str], batch.instance_id), device=z_g.device)
+        l_reg = self._reg_loss(theta_hat_recon, config)
+        l_supcon = self._supcon_loss(z_g, z_theta, labels, config)
+        loss = l_reg + self._lambda_supcon * l_supcon
+
+        batch_size = cast(int, batch.batch_size)
+        self.log("test_loss", loss, prog_bar=True, batch_size=batch_size)
+        self.log("test_l_reg", l_reg, batch_size=batch_size)
+        self.log("test_l_supcon", l_supcon, batch_size=batch_size)
 
         config_cpu = config.detach().cpu()
         cross_cpu = theta_hat_cross.detach().cpu()

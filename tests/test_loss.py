@@ -37,31 +37,35 @@ def _make_batch(
 class TestBuildMasks:
     """Tests for :meth:`MultiPositiveSupConLoss._build_masks`."""
 
+    @staticmethod
+    def _symmetric_masks(labels: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Build masks for the symmetric (no-queue) case used in most tests."""
+        all_labels = torch.cat([labels, labels])
+        return MultiPositiveSupConLoss._build_masks(labels, all_labels, torch.device("cpu"))
+
     def test_self_column_excluded_from_positives(self) -> None:
-        """Anchor i must not count column i (its own h_G copy) as a positive."""
+        """Anchor i must not count column i (its own copy in anchor portion) as a positive."""
         b = 4
         labels = torch.tensor([0, 0, 1, 1])
-        pos_mask, _ = MultiPositiveSupConLoss._build_masks(labels, b, torch.device("cpu"))
+        pos_mask, _ = self._symmetric_masks(labels)
 
         for i in range(b):
             assert not pos_mask[i, i], f"Anchor {i} should not be its own positive"
 
     def test_cross_modal_positive_included(self) -> None:
-        """For each anchor i, column B+i (paired h_θ_i) must be a positive."""
+        """For each anchor i, column B+i (paired config embedding) must be a positive."""
         b = 4
-        labels = torch.tensor([0, 1, 2, 3])  # all distinct — only cross-modal positive each
-        pos_mask, _ = MultiPositiveSupConLoss._build_masks(labels, b, torch.device("cpu"))
+        labels = torch.tensor([0, 1, 2, 3])  # all distinct -- only cross-modal positive each
+        pos_mask, _ = self._symmetric_masks(labels)
 
         for i in range(b):
             assert pos_mask[i, b + i], f"Anchor {i}: paired config embedding must be positive"
 
     def test_same_modal_positives_included(self) -> None:
         """h_G_j with the same label as anchor i (j != i) must appear as positives."""
-        b = 4
         labels = torch.tensor([0, 0, 0, 1])
-        pos_mask, _ = MultiPositiveSupConLoss._build_masks(labels, b, torch.device("cpu"))
+        pos_mask, _ = self._symmetric_masks(labels)
 
-        # Anchors 0, 1, 2 share label 0 — each should see the other two as same-modal positives
         assert pos_mask[0, 1] and pos_mask[0, 2], "Anchor 0 missing same-modal positives"
         assert pos_mask[1, 0] and pos_mask[1, 2], "Anchor 1 missing same-modal positives"
         assert pos_mask[2, 0] and pos_mask[2, 1], "Anchor 2 missing same-modal positives"
@@ -70,37 +74,63 @@ class TestBuildMasks:
         """Embeddings from a different label group must not appear as positives."""
         b = 4
         labels = torch.tensor([0, 0, 1, 1])
-        pos_mask, _ = MultiPositiveSupConLoss._build_masks(labels, b, torch.device("cpu"))
+        pos_mask, _ = self._symmetric_masks(labels)
 
-        # Anchors 0/1 (label 0) must not treat columns 2/3 or B+2/B+3 (label 1) as positives
         for i in [0, 1]:
             for j in [2, 3, b + 2, b + 3]:
                 assert not pos_mask[i, j], f"Anchor {i}, col {j}: cross-label must not be positive"
 
     def test_output_shapes(self) -> None:
-        """pos_mask and self_mask must both be (B, 2B) booleans."""
+        """pos_mask and self_mask must both be (B, 2B) booleans for the symmetric case."""
         b = 6
         labels = torch.zeros(b, dtype=torch.long)
-        pos_mask, self_mask = MultiPositiveSupConLoss._build_masks(labels, b, torch.device("cpu"))
+        pos_mask, self_mask = self._symmetric_masks(labels)
 
         assert pos_mask.shape == (b, 2 * b)
         assert self_mask.shape == (b, 2 * b)
         assert pos_mask.dtype == torch.bool
         assert self_mask.dtype == torch.bool
 
+    def test_asymmetric_key_pool(self) -> None:
+        """With B_a anchors and B_k > B_a keys, masks are (B_a, B_a + B_k)."""
+        b_a, b_k = 4, 6
+        anchor_labels = torch.tensor([0, 1, 2, 3])
+        extra_labels = torch.tensor([0, 1, 4, 5, 4, 5])
+        all_labels = torch.cat([anchor_labels, extra_labels])
+        pos_mask, self_mask = MultiPositiveSupConLoss._build_masks(
+            anchor_labels, all_labels, torch.device("cpu")
+        )
+
+        assert pos_mask.shape == (b_a, b_a + b_k)
+        assert self_mask.shape == (b_a, b_a + b_k)
+        # Anchor 0 (label 0) should match extra_labels[0] (label 0) at column b_a + 0
+        assert pos_mask[0, b_a + 0], "Anchor 0 should match extra key at column b_a"
+
 
 class TestNegativeWeights:
     """Tests for :meth:`MultiPositiveSupConLoss._negative_weights`."""
+
+    @staticmethod
+    def _sym_masks_and_configs(
+        b: int, c: int, labels: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return (configs, all_configs, pos_mask, self_mask) for the symmetric (no-queue) case."""
+        configs = torch.rand(b, c)
+        all_configs = torch.cat([configs, configs])
+        all_labels = torch.cat([labels, labels])
+        pos_mask, self_mask = MultiPositiveSupConLoss._build_masks(
+            labels, all_labels, torch.device("cpu")
+        )
+        return configs, all_configs, pos_mask, self_mask
 
     def test_zero_on_positives_and_self(self) -> None:
         """Weight must be 0 on positive and self-column entries."""
         loss_fn = MultiPositiveSupConLoss()
         b, c = 4, 9
-        configs = torch.rand(b, c)
         labels = torch.tensor([0, 0, 1, 1])
-        pos_mask, self_mask = MultiPositiveSupConLoss._build_masks(labels, b, torch.device("cpu"))
+        configs, all_configs, pos_mask, self_mask = self._sym_masks_and_configs(b, c, labels)
 
-        weights = loss_fn._negative_weights(configs, pos_mask, self_mask)
+        weights = loss_fn._negative_weights(configs, all_configs, pos_mask, self_mask)
 
         assert (weights[pos_mask] == 0).all(), "Weights must be 0 on positive entries"
         assert (weights[self_mask] == 0).all(), "Weights must be 0 on self entries"
@@ -109,31 +139,30 @@ class TestNegativeWeights:
         """Identical configs produce higher negative weight than distant configs."""
         loss_fn = MultiPositiveSupConLoss(tau_dist=1.0)
         b, c = 4, 9
-        # Two groups: labels 0 (items 0-1) and 1 (items 2-3)
         labels = torch.tensor([0, 0, 1, 1])
-        pos_mask, self_mask = MultiPositiveSupConLoss._build_masks(labels, b, torch.device("cpu"))
+        _, _, pos_mask, self_mask = self._sym_masks_and_configs(b, c, labels)
 
-        configs_close = torch.zeros(b, c)  # all configs identical
+        configs_close = torch.zeros(b, c)
+        all_close = torch.cat([configs_close, configs_close])
         configs_far = torch.zeros(b, c)
-        configs_far[2:] = 100.0  # group 1 very far from group 0
+        configs_far[2:] = 100.0
+        all_far = torch.cat([configs_far, configs_far])
 
-        w_close = loss_fn._negative_weights(configs_close, pos_mask, self_mask)
-        w_far = loss_fn._negative_weights(configs_far, pos_mask, self_mask)
+        w_close = loss_fn._negative_weights(configs_close, all_close, pos_mask, self_mask)
+        w_far = loss_fn._negative_weights(configs_far, all_far, pos_mask, self_mask)
 
-        # Anchor 0 vs column 2 (negative): close-config weight should exceed far-config weight
         assert w_close[0, 2].item() > w_far[0, 2].item(), (
             "Identical configs should produce higher negative weight than distant configs"
         )
 
     def test_output_shape(self) -> None:
-        """Output must be ``(B, 2B)``."""
+        """Output must be ``(B, 2B)`` for the symmetric case."""
         loss_fn = MultiPositiveSupConLoss()
         b, c = 6, 9
-        configs = torch.rand(b, c)
         labels = torch.zeros(b, dtype=torch.long)
-        pos_mask, self_mask = MultiPositiveSupConLoss._build_masks(labels, b, torch.device("cpu"))
+        configs, all_configs, pos_mask, self_mask = self._sym_masks_and_configs(b, c, labels)
 
-        weights = loss_fn._negative_weights(configs, pos_mask, self_mask)
+        weights = loss_fn._negative_weights(configs, all_configs, pos_mask, self_mask)
 
         assert weights.shape == (b, 2 * b)
 

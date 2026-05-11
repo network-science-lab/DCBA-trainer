@@ -67,7 +67,7 @@ Use cases:
 
 ## Run the code
 
-Training (single GPU):
+Training:
 
 ```bash
 uv run dcba-train --config-name base

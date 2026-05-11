@@ -1,7 +1,6 @@
 """Lightning logger factory."""
 
 import logging
-import os
 from unittest.mock import MagicMock
 
 import wandb
@@ -27,9 +26,6 @@ def get_logger(config: dict) -> loggers.WandbLogger | DummyLogger:
     :returns: A :class:`~lightning.pytorch.loggers.WandbLogger` if wandb is reachable,
         otherwise a :class:`DummyLogger` that silently absorbs all calls.
     """
-    if int(os.environ.get("LOCAL_RANK", "0")) != 0:
-        return DummyLogger()
-
     try:
         run = (
             wandb.init(

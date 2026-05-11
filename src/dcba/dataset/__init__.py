@@ -4,6 +4,7 @@ from dcba.dataset.dcba_dataset import ABCDDataset
 from dcba.dataset.transforms import (
     ABCD_CONFIG_KEYS,
     ABCD_INT_FEATURE_INDICES,
+    ABCDConfig,
     ABCDConfigScaler,
     ABCDConfigToTensor,
     abcd_param_bounds,
@@ -11,6 +12,7 @@ from dcba.dataset.transforms import (
 
 __all__ = [
     "ABCDDataset",
+    "ABCDConfig",
     "ABCDConfigToTensor",
     "ABCDConfigScaler",
     "ABCD_CONFIG_KEYS",

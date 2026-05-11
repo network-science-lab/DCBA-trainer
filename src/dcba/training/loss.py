@@ -1,5 +1,6 @@
 """Loss functions for DCBA training."""
 
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -46,34 +47,38 @@ class MultiPositiveSupConLoss(nn.Module):
         self.bidirectional = bidirectional
 
     @staticmethod
-    def _build_masks(labels: Tensor, b: int, device: torch.device) -> tuple[Tensor, Tensor]:
+    def _build_masks(
+        anchor_labels: Tensor, all_labels: Tensor, device: torch.device
+    ) -> tuple[Tensor, Tensor]:
         """
-        Build the positive and self-exclusion masks over the ``(B, 2B)`` similarity grid.
+        Build positive and self-exclusion masks over the ``(B_a, B_a + B_k)`` similarity grid.
 
-        The ``2B`` columns correspond to the stacked embedding matrix ``[anchors; others]``.
-        Anchor ``i`` (row) must never count itself (column ``i``) as a positive.
+        Columns correspond to ``[anchors; others]`` where ``B_k >= 0`` extra key entries may
+        extend ``others`` beyond ``B_a``.  Anchor ``i`` is excluded from column ``i``
+        (its own copy in the anchor portion of the pool).
 
-        :param labels: ``(B,)`` integer group indices for the anchors.
-        :param b: Batch size ``B``.
+        :param anchor_labels: ``(B_a,)`` integer group indices for the anchors.
+        :param all_labels: ``(B_a + B_k,)`` group indices for the full key pool
+            ``[anchors; others]``.
         :param device: Target device for the output tensors.
 
-        :returns: Tuple ``(pos_mask, self_mask)`` each of shape ``(B, 2B)`` and dtype bool.
+        :returns: Tuple ``(pos_mask, self_mask)`` each of shape ``(B_a, B_a + B_k)``, dtype bool.
         """
-        tiled_labels = torch.cat([labels, labels], dim=0)  # (2B,)
+        b_a = anchor_labels.size(0)
+        b_total = all_labels.size(0)
 
-        # self_mask[i, i] = True -- anchor i must not attend to its own copy in column i
-        self_mask = torch.zeros(b, 2 * b, dtype=torch.bool, device=device)
-        self_mask[torch.arange(b, device=device), torch.arange(b, device=device)] = True
+        self_mask = torch.zeros(b_a, b_total, dtype=torch.bool, device=device)
+        self_mask[torch.arange(b_a, device=device), torch.arange(b_a, device=device)] = True
 
-        # pos_mask[i, j] = True iff tiled_labels[j] == labels[i] and j != i
-        pos_mask = labels.unsqueeze(1) == tiled_labels.unsqueeze(0)  # (B, 2B)
+        pos_mask = anchor_labels.unsqueeze(1) == all_labels.unsqueeze(0)  # (B_a, B_a + B_k)
         pos_mask = pos_mask & ~self_mask
 
         return pos_mask, self_mask
 
     def _negative_weights(
         self,
-        configs: Tensor,
+        anchor_configs: Tensor,
+        all_configs: Tensor,
         pos_mask: Tensor,
         self_mask: Tensor,
     ) -> Tensor:
@@ -81,17 +86,15 @@ class MultiPositiveSupConLoss(nn.Module):
         Compute soft negative weights from pairwise config distances.
 
         ``w_ij = exp(-||θ_i - θ_j|| / tau_dist)`` for negative pairs, 0 elsewhere.
-        Nearby configs receive a weight close to 1 (soft negatives); distant configs
-        receive a weight near 0 (hard negatives).
 
-        :param configs: ``(B, C)`` normalised config vectors for the anchors.
-        :param pos_mask: ``(B, 2B)`` bool mask of valid positives.
-        :param self_mask: ``(B, 2B)`` bool mask of self-columns to exclude.
+        :param anchor_configs: ``(B_a, C)`` config vectors for the anchors.
+        :param all_configs: ``(B_a + B_k, C)`` config vectors for the full key pool.
+        :param pos_mask: ``(B_a, B_a + B_k)`` bool mask of valid positives.
+        :param self_mask: ``(B_a, B_a + B_k)`` bool mask of self-columns to exclude.
 
-        :returns: ``(B, 2B)`` float weight matrix, zero on positive and self entries.
+        :returns: ``(B_a, B_a + B_k)`` float weight matrix, zero on positive and self entries.
         """
-        tiled_configs = torch.cat([configs, configs], dim=0)  # (2B, C)
-        dist = torch.cdist(configs, tiled_configs, p=2)  # (B, 2B)
+        dist = torch.cdist(anchor_configs, all_configs, p=2)  # (B_a, B_a + B_k)
         weights = torch.exp(-dist / self.tau_dist)
         neg_mask = ~pos_mask & ~self_mask
         return weights * neg_mask.float()
@@ -129,34 +132,45 @@ class MultiPositiveSupConLoss(nn.Module):
         self,
         anchors: Tensor,
         others: Tensor,
-        labels: Tensor,
-        configs: Tensor,
+        anchor_labels: Tensor,
+        key_labels: Tensor,
+        anchor_configs: Tensor,
+        key_configs: Tensor,
+        precomputed_neg_weights: Tensor | None = None,
     ) -> Tensor:
         """
         Compute the contrastive loss for one direction: ``anchors`` vs ``[anchors; others]``.
 
-        Both ``anchors`` and ``others`` must already be L2-normalised.
+        ``others`` may be larger than ``anchors`` (e.g. current-batch anchors against an
+        extended key pool that includes memory-bank entries).  Both tensors must be L2-normalised.
 
-        :param anchors: ``(B, D)`` normalised anchor embeddings.
-        :param others: ``(B, D)`` normalised embeddings forming the cross-modal half of the pool.
-        :param labels: ``(B,)`` integer group indices shared by both modalities.
-        :param configs: ``(B, C)`` normalised parameter vectors for soft negative weighting.
+        When ``precomputed_neg_weights`` is provided it is used directly (after masking out
+        positives and self-pairs) instead of computing distances from ``anchor_configs`` and
+        ``key_configs``.  This supports encoders where configs are not numeric vectors.
+
+        :param anchors: ``(B_a, D)`` normalised anchor embeddings.
+        :param others: ``(B_k, D)`` normalised key-pool embeddings; ``B_k >= B_a``.
+        :param anchor_labels: ``(B_a,)`` group indices for the anchors.
+        :param key_labels: ``(B_k,)`` group indices for the key pool.
+        :param anchor_configs: ``(B_a, C)`` parameter vectors for the anchors.
+        :param key_configs: ``(B_k, C)`` parameter vectors for the key pool.
+        :param precomputed_neg_weights: Optional ``(B_a, B_a + B_k)`` raw weight matrix
+            (before positive/self masking).  When supplied, replaces the internal
+            :meth:`_negative_weights` call.
 
         :returns: Scalar loss tensor.
         """
-        b = anchors.size(0)
-        all_embeddings = torch.cat([anchors, others], dim=0)  # (2B, D)
-        sim = torch.mm(anchors, all_embeddings.t()) / self.temperature  # (B, 2B)
+        all_embeddings = torch.cat([anchors, others], dim=0)  # (B_a + B_k, D)
+        all_labels = torch.cat([anchor_labels, key_labels], dim=0)  # (B_a + B_k,)
+        all_configs = torch.cat([anchor_configs, key_configs], dim=0)  # (B_a + B_k, C)
+        sim = torch.mm(anchors, all_embeddings.t()) / self.temperature  # (B_a, B_a + B_k)
 
-        pos_mask, self_mask = self._build_masks(labels, b, sim.device)
-
-        if not pos_mask.any():
-            raise ValueError(
-                "MultiPositiveSupConLoss: no valid positives found in this batch. "
-                "Each sample has a distinct label -- contrastive loss is undefined."
-            )
-
-        neg_weight = self._negative_weights(configs, pos_mask, self_mask)
+        pos_mask, self_mask = self._build_masks(anchor_labels, all_labels, sim.device)
+        if precomputed_neg_weights is not None:
+            neg_mask = ~pos_mask & ~self_mask
+            neg_weight = precomputed_neg_weights * neg_mask.float()
+        else:
+            neg_weight = self._negative_weights(anchor_configs, all_configs, pos_mask, self_mask)
         return self._compute_loss(sim, pos_mask, neg_weight)
 
     def forward(
@@ -165,27 +179,64 @@ class MultiPositiveSupConLoss(nn.Module):
         config_embeddings: Tensor,
         labels: Tensor,
         configs: Tensor,
+        z_theta_keys: Tensor | None = None,
+        z_g_keys: Tensor | None = None,
+        key_labels: Tensor | None = None,
+        key_configs: Tensor | None = None,
+        precomputed_neg_weights: Tensor | None = None,
     ) -> Tensor:
         """
         Compute the multi-positive supervised contrastive loss.
+
+        When the optional ``z_theta_keys`` / ``z_g_keys`` arguments are supplied, the key pool
+        for each direction is extended beyond the current batch (e.g. with memory-bank entries).
+        Only ``graph_embeddings`` / ``config_embeddings`` act as gradient-carrying anchors;
+        extra key entries are used solely to enrich the pool of negatives.
 
         :param graph_embeddings: ``(B, D)`` L2-normalised graph embeddings ``z_G``; anchors in
             the forward direction.
         :param config_embeddings: ``(B, D)`` L2-normalised config embeddings ``z_θ``; anchors
             in the reverse direction when ``bidirectional=True``.
-        :param labels: ``(B,)`` integer group index; ``graph_embeddings[i]`` and
-            ``config_embeddings[i]`` share ``labels[i]``.
-        :param configs: ``(B, C)`` normalised parameter vectors used for negative soft-weighting.
-
-        Both tensors must be L2-normalised before being passed in; the wrapper is responsible
-        for normalisation so that the decoder operates in the same space.
+        :param labels: ``(B,)`` integer group index shared by both modalities.
+        :param configs: ``(B, C)`` normalised parameter vectors for soft negative weighting.
+        :param z_theta_keys: Optional ``(B_k, D)`` extended key pool for the forward direction
+            (replaces ``config_embeddings`` as the cross-modal target set).
+        :param z_g_keys: Optional ``(B_k, D)`` extended key pool for the reverse direction.
+        :param key_labels: ``(B_k,)`` group indices matching ``z_theta_keys`` / ``z_g_keys``;
+            required when either key pool is provided.
+        :param key_configs: ``(B_k, C)`` config vectors for the extended key pool; required
+            when either key pool is provided.
+        :param precomputed_neg_weights: Optional ``(B, B + B_k)`` raw soft-negative weight
+            matrix computed externally (e.g. via NLS on config strings).  When supplied it
+            overrides the internal distance-based computation in both directional loss calls.
+            The same matrix is reused for both directions since config similarity is symmetric
+            and both directions share identical anchor/key config assignments.
 
         :returns: Scalar loss tensor with ``requires_grad=True``.
         """
-        loss = self._directional_loss(graph_embeddings, config_embeddings, labels, configs)
+        fwd_others = z_theta_keys if z_theta_keys is not None else config_embeddings
+        fwd_key_labels = key_labels if key_labels is not None else labels
+        fwd_key_configs = key_configs if key_configs is not None else configs
+
+        loss = self._directional_loss(
+            graph_embeddings,
+            fwd_others,
+            labels,
+            fwd_key_labels,
+            configs,
+            fwd_key_configs,
+            precomputed_neg_weights,
+        )
         if self.bidirectional:
+            rev_others = z_g_keys if z_g_keys is not None else graph_embeddings
             loss = loss + self._directional_loss(
-                config_embeddings, graph_embeddings, labels, configs
+                config_embeddings,
+                rev_others,
+                labels,
+                fwd_key_labels,
+                configs,
+                fwd_key_configs,
+                precomputed_neg_weights,
             )
         return loss
 

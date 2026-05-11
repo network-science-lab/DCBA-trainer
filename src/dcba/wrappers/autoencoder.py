@@ -3,7 +3,6 @@
 from typing import cast
 from unittest.mock import MagicMock
 
-import torch
 import torch.nn as nn
 import wandb
 from dcba_data_set.graph_io.data_models import DCBAHeteroData
@@ -62,10 +61,9 @@ class DCBAAutoencoderWrapper(DCBABaseWrapper):
         return self._encoder(batch)
 
     def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
-        _, _, target = self._unpack_batch(batch)
+        config = self._unpack_batch(batch)
         out = self._encoder(batch)
-        x_hat = out.reconstruction
-        loss = self._loss_fn(x_hat, target)
+        loss = self._loss_fn(out.reconstruction, config)
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch.batch_size)
         return loss
 
@@ -75,15 +73,13 @@ class DCBAAutoencoderWrapper(DCBABaseWrapper):
         batch_idx: int,
     ) -> None:
         """Compute and log test loss; accumulate per-sample reconstruction rows."""
-        self._step(batch, "test")
-
-        config, _, _ = self._unpack_batch(batch)
-        with torch.no_grad():
-            out = self._encoder(batch)
-            theta_hat = out.reconstruction
+        config = self._unpack_batch(batch)
+        out = self._encoder(batch)
+        loss = self._loss_fn(out.reconstruction, config)
+        self.log("test_loss", loss, prog_bar=True, batch_size=batch.batch_size)
 
         config_cpu = config.detach().cpu()
-        recon_cpu = theta_hat.detach().cpu()
+        recon_cpu = out.reconstruction.detach().cpu()
 
         if self._scaler is not None:
             config_cpu = self._scaler.inverse_transform(config_cpu)

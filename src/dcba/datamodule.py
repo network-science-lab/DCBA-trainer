@@ -6,8 +6,9 @@ from pathlib import Path
 import lightning.pytorch as pl
 from dcba_data_set.graph_io import load_report
 from torch_geometric.loader import DataLoader
+from torch_geometric.transforms import BaseTransform
 
-from dcba.dataset import ABCDConfigScaler, ABCDDataset
+from dcba.dataset import ABCDConfigScaler, ABCDConfigToTensor, ABCDDataset
 
 
 class ABCDDataModule(pl.LightningDataModule):
@@ -15,13 +16,10 @@ class ABCDDataModule(pl.LightningDataModule):
     LightningDataModule that loads an ABCD report and splits it into train/val/test sets.
 
     Splitting is performed on ``instance_id`` keys to prevent data leakage between splits.
-    A :class:`~dcba.dataset.ABCDConfigScaler` is built during :meth:`setup` and stored as
-    :attr:`scaler` so the training wrapper can retrieve it for inference.
+    The ``scaler`` and ``transform`` are injected by the caller (typically the training entry
+    point) and stored as public attributes so wrappers can retrieve them at inference time.
 
     :param report_path: Path to the ``report.json`` manifest.
-    :param n_max: Maximum graph size in the dataset.  Controls the upper bound of all
-        node-count-dependent features in the scaler (``n``, ``c_min``, ``c_max``,
-        ``d_min``, ``d_max``, ``nout``).
     :param val_ratio: Fraction of instances to use for validation.
     :param test_ratio: Fraction of instances to use for testing.
     :param batch_size: Number of samples per dataloader batch.
@@ -30,23 +28,27 @@ class ABCDDataModule(pl.LightningDataModule):
         used.  When ``False``, all replicas are included.
     :param seed: RNG seed used to shuffle instances before splitting.  Fixes the train/val/test
         assignment across runs.
+    :param scaler: Optional scaler applied after the transform to normalise config features.
+        When ``None``, configs are kept in raw form.
+    :param transform: Transform applied to each config record.  Defaults to
+        :class:`~dcba.dataset.transforms.ABCDConfigToTensor`.
     """
 
     def __init__(
         self,
         report_path: Path,
-        n_max: int = 10_000,
         val_ratio: float = 0.1,
         test_ratio: float = 0.1,
         batch_size: int = 32,
         num_workers: int = 0,
         single_replica_per_instance: bool = True,
         seed: int = 42,
+        scaler: ABCDConfigScaler | None = None,
+        transform: BaseTransform = ABCDConfigToTensor(),
     ) -> None:
         """Initialise the data module with dataset path and split/loader parameters."""
         super().__init__()
         self._report_path = Path(report_path)
-        self._n_max = n_max
         self._val_ratio = val_ratio
         self._test_ratio = test_ratio
         self._batch_size = batch_size
@@ -54,10 +56,11 @@ class ABCDDataModule(pl.LightningDataModule):
         self._single_replica_per_instance = single_replica_per_instance
         self._seed = seed
 
+        self.scaler: ABCDConfigScaler | None = scaler
+        self.transform: BaseTransform | None = transform
         self._train_dataset: ABCDDataset | None = None
         self._val_dataset: ABCDDataset | None = None
         self._test_dataset: ABCDDataset | None = None
-        self.scaler: ABCDConfigScaler | None = None
 
     def setup(self, stage: str | None = None) -> None:
         """
@@ -85,21 +88,22 @@ class ABCDDataModule(pl.LightningDataModule):
         val_ids = set(instance_ids[n_train : n_train + n_val])
         test_ids = set(instance_ids[n_train + n_val :])
 
-        self.scaler = ABCDConfigScaler(n_max=self._n_max)
-
         self._train_dataset = ABCDDataset(
             records=[r for r in records if r.instance_id in train_ids],
             scaler=self.scaler,
+            transform=self.transform,
             single_replica_per_instance=self._single_replica_per_instance,
         )
         self._val_dataset = ABCDDataset(
             records=[r for r in records if r.instance_id in val_ids],
             scaler=self.scaler,
+            transform=self.transform,
             single_replica_per_instance=self._single_replica_per_instance,
         )
         self._test_dataset = ABCDDataset(
             records=[r for r in records if r.instance_id in test_ids],
             scaler=self.scaler,
+            transform=self.transform,
             single_replica_per_instance=self._single_replica_per_instance,
         )
 
