@@ -8,9 +8,9 @@ data:
   report_path: "abcd-interim/report.json"
   # report_path: "test/dataset_abcd/report.json"
   n_max: 10000 # upper bound for all node-count-dependent scaler features
-  val_ratio: 0.15
-  test_ratio: 0.15
-  batch_size: 8
+  val_ratio: 0.10
+  test_ratio: 0.10
+  batch_size: 4
   num_workers: 0
 
 models:
@@ -24,17 +24,14 @@ training:
   wrapper: config_autoencoder
   accelerator: gpu
   devices: [0]
-  max_epochs: 100
+  max_epochs: 200
   losses:
     reg:
-      name: mse
-      args: {}
-  # To use the constraint-penalty loss:
-  # losses:
-  #   reg:
-  #     name: abcd_constraint
-  #     args:
-  #       lambda_penalty: 1.0
+      name: abcd_constraint
+      args:
+        lambda_penalty: 1.0
+      # name: mse
+      # args: {}
   optimizer:
     name: AdamW
     args:
@@ -42,8 +39,8 @@ training:
       weight_decay: 0.00001
   logger:
     project: dcba
-    name: config-autoencoder
-    tags: [phase-1]
+    name: ff-autoencoder
+    tags: [mlp, abcd-constraint, funnel-mlp, bs4]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss

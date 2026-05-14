@@ -7,8 +7,8 @@ random_seed: 42
 data:
   report_path: "abcd-interim/report.json"
   n_max: 10000 # upper bound for all node-count-dependent scaler features
-  val_ratio: 0.15
-  test_ratio: 0.15
+  val_ratio: 0.10
+  test_ratio: 0.10
   batch_size: 16 # small enough for interim dataset; scale to ~256 (K>=32 configs x N graphs) for production
   num_workers: 0
 
@@ -22,28 +22,28 @@ models:
   theta:
     cls: ConfigAutoEncoder
     input_dim: 9
-    hidden_dims: [64]
+    hidden_dims: [128, 64]
     embedding_dim: 32 # must match models.graph.embedding_dim
 
 training:
   wrapper: supcon
   accelerator: gpu
   devices: [0]
-  max_epochs: 100
+  max_epochs: 200
   losses:
-    # reg:
-    #   name: mse
-    #   args: {}
     reg:
       name: abcd_constraint
       args:
         lambda_penalty: 1.0
+      # name: mse
+      # args: {}
     repr:
       name: supcon
       weight: 1.0
       args:
         temperature: 0.07
         tau_dist: 1.0
+        bidirectional: true
   optimizer:
     name: AdamW
     args:
@@ -51,8 +51,8 @@ training:
       weight_decay: 0.00001
   logger:
     project: dcba
-    name: stage1-supcon
-    tags: [stage-1, supcon]
+    name: mm-supcon
+    tags: [supcon, abcd-constraint, expand-compress-gnn, bidirectional, deeper-theta]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss
