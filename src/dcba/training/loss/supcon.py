@@ -1,9 +1,7 @@
-"""Loss functions for DCBA training."""
-
+"""Multi-positive supervised contrastive loss with embedding queue and NLS weighting."""
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch import Tensor
 
 
@@ -166,6 +164,11 @@ class MultiPositiveSupConLoss(nn.Module):
         sim = torch.mm(anchors, all_embeddings.t()) / self.temperature  # (B_a, B_a + B_k)
 
         pos_mask, self_mask = self._build_masks(anchor_labels, all_labels, sim.device)
+        if not pos_mask.any():
+            raise ValueError(
+                "MultiPositiveSupConLoss: no valid positives found in this batch. "
+                "Each sample has a distinct label -- contrastive loss is undefined."
+            )
         if precomputed_neg_weights is not None:
             neg_mask = ~pos_mask & ~self_mask
             neg_weight = precomputed_neg_weights * neg_mask.float()
@@ -179,19 +182,9 @@ class MultiPositiveSupConLoss(nn.Module):
         config_embeddings: Tensor,
         labels: Tensor,
         configs: Tensor,
-        z_theta_keys: Tensor | None = None,
-        z_g_keys: Tensor | None = None,
-        key_labels: Tensor | None = None,
-        key_configs: Tensor | None = None,
-        precomputed_neg_weights: Tensor | None = None,
     ) -> Tensor:
         """
         Compute the multi-positive supervised contrastive loss.
-
-        When the optional ``z_theta_keys`` / ``z_g_keys`` arguments are supplied, the key pool
-        for each direction is extended beyond the current batch (e.g. with memory-bank entries).
-        Only ``graph_embeddings`` / ``config_embeddings`` act as gradient-carrying anchors;
-        extra key entries are used solely to enrich the pool of negatives.
 
         :param graph_embeddings: ``(B, D)`` L2-normalised graph embeddings ``z_G``; anchors in
             the forward direction.
@@ -199,112 +192,14 @@ class MultiPositiveSupConLoss(nn.Module):
             in the reverse direction when ``bidirectional=True``.
         :param labels: ``(B,)`` integer group index shared by both modalities.
         :param configs: ``(B, C)`` normalised parameter vectors for soft negative weighting.
-        :param z_theta_keys: Optional ``(B_k, D)`` extended key pool for the forward direction
-            (replaces ``config_embeddings`` as the cross-modal target set).
-        :param z_g_keys: Optional ``(B_k, D)`` extended key pool for the reverse direction.
-        :param key_labels: ``(B_k,)`` group indices matching ``z_theta_keys`` / ``z_g_keys``;
-            required when either key pool is provided.
-        :param key_configs: ``(B_k, C)`` config vectors for the extended key pool; required
-            when either key pool is provided.
-        :param precomputed_neg_weights: Optional ``(B, B + B_k)`` raw soft-negative weight
-            matrix computed externally (e.g. via NLS on config strings).  When supplied it
-            overrides the internal distance-based computation in both directional loss calls.
-            The same matrix is reused for both directions since config similarity is symmetric
-            and both directions share identical anchor/key config assignments.
 
         :returns: Scalar loss tensor with ``requires_grad=True``.
         """
-        fwd_others = z_theta_keys if z_theta_keys is not None else config_embeddings
-        fwd_key_labels = key_labels if key_labels is not None else labels
-        fwd_key_configs = key_configs if key_configs is not None else configs
-
         loss = self._directional_loss(
-            graph_embeddings,
-            fwd_others,
-            labels,
-            fwd_key_labels,
-            configs,
-            fwd_key_configs,
-            precomputed_neg_weights,
+            graph_embeddings, config_embeddings, labels, labels, configs, configs
         )
         if self.bidirectional:
-            rev_others = z_g_keys if z_g_keys is not None else graph_embeddings
             loss = loss + self._directional_loss(
-                config_embeddings,
-                rev_others,
-                labels,
-                fwd_key_labels,
-                configs,
-                fwd_key_configs,
-                precomputed_neg_weights,
+                config_embeddings, graph_embeddings, labels, labels, configs, configs
             )
         return loss
-
-
-class ABCDConstraintPenaltyLoss(nn.Module):
-    """
-    MSE reconstruction loss augmented with squared-hinge penalties for ABCD config constraints.
-
-    All arithmetic operates in normalised space (values expected in ``[0, 1]``), matching the
-    model's output domain.  The total loss is::
-
-        MSE(x_hat, target) + λ · Σ relu(violation)²
-
-    Per-feature range penalties ensure every predicted feature stays within ``[0, 1]``.
-    Cross-parameter ordering penalties enforce the structural ABCD constraints:
-
-    - ``c_min <= c_max``
-    - ``d_min <= d_max``
-    - ``c_max <= n``
-    - ``d_max <= n``
-    - ``nout <= n``
-
-    .. note::
-        ``n`` (index 0) is exempt from the above-range penalty (``> 1`` in normalised space)
-        to accommodate edge cases where the model predicts graphs larger than ``n_max``.
-
-    Feature indices follow :data:`~dcba.dataset.transforms.ABCD_CONFIG_KEYS`:
-    ``[n, t1, t2, xi, c_min, c_max, d_min, d_max, nout]`` -> indices 0-8.
-
-    :param lambda_penalty: Weight applied to the sum of constraint penalty terms.
-    """
-
-    def __init__(self, lambda_penalty: float = 1.0) -> None:
-        """Initialise the loss with the given penalty weight."""
-        super().__init__()
-        self.lambda_penalty = lambda_penalty
-
-    def forward(self, x_hat: Tensor, target: Tensor) -> Tensor:
-        """
-        Compute MSE + λ · Σ relu(violation)².
-
-        :param x_hat: Reconstructed normalised config tensor of shape ``(batch, 9)``.
-        :param target: Ground-truth normalised config tensor of shape ``(batch, 9)``.
-
-        :returns: Scalar loss tensor.
-        """
-        mse = F.mse_loss(x_hat, target)
-
-        # Per-feature range: each feature should lie in [0, 1].
-        # n (idx 0) is exempt from the above-range check -- the model may predict n > n_max
-        # in edge cases with larger networks, which we do not want to penalise.
-        below = F.relu(-x_hat)
-        above = F.relu(x_hat[:, 1:] - 1.0)  # features 1-8 only
-        range_penalty = (below**2).sum(dim=1).mean() + (above**2).sum(dim=1).mean()
-
-        # Cross-parameter ordering constraints
-        # c_min (idx 4) <= c_max (idx 5)
-        c_order = F.relu(x_hat[:, 4] - x_hat[:, 5]) ** 2
-        # d_min (idx 6) <= d_max (idx 7)
-        d_order = F.relu(x_hat[:, 6] - x_hat[:, 7]) ** 2
-        # c_max (idx 5) <= n (idx 0)
-        c_max_n = F.relu(x_hat[:, 5] - x_hat[:, 0]) ** 2
-        # d_max (idx 7) <= n (idx 0)
-        d_max_n = F.relu(x_hat[:, 7] - x_hat[:, 0]) ** 2
-        # nout (idx 8) <= n (idx 0)
-        nout_n = F.relu(x_hat[:, 8] - x_hat[:, 0]) ** 2
-
-        ordering_penalty = (c_order + d_order + c_max_n + d_max_n + nout_n).mean()
-
-        penalty = range_penalty + ordering_penalty
-        return mse + self.lambda_penalty * penalty

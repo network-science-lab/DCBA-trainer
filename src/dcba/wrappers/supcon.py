@@ -1,6 +1,5 @@
 """DCBASupConWrapper -- joint graph + config encoder training with SupCon + regression loss."""
 
-import hashlib
 from typing import cast
 from unittest.mock import MagicMock
 
@@ -84,11 +83,11 @@ class DCBASupConWrapper(DCBABaseWrapper):
 
         :returns: ``(B,)`` int64 tensor of stable, globally unique group indices.
         """
-
-        def _h(s: str) -> int:
-            return int.from_bytes(hashlib.sha256(s.encode()).digest()[:8], "big") >> 1
-
-        return torch.tensor([_h(uid) for uid in instance_ids], dtype=torch.long, device=device)
+        return torch.tensor(
+            [int(uid.replace("-", "")[:16], 16) >> 1 for uid in instance_ids],
+            dtype=torch.long,
+            device=device,
+        )
 
     def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
         config = self._unpack_batch(batch)
@@ -111,34 +110,25 @@ class DCBASupConWrapper(DCBABaseWrapper):
 
     def test_step(self, batch: DCBAHeteroData, batch_idx: int) -> None:
         """Compute and log test loss; accumulate per-sample rows for the prediction table."""
-        config = self._unpack_batch(batch)
+        self._step(batch, "test")
 
+        config = self._unpack_batch(batch)
         z_g = F.normalize(self._graph_encoder.encode(batch), dim=-1)
         z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
         theta_hat_recon = self._config_encoder.decode(z_theta)
         theta_hat_cross = self._config_encoder.decode(z_g)
 
-        labels = self._instance_labels(cast(list[str], batch.instance_id), device=z_g.device)
-        l_reg = self._reg_loss(theta_hat_recon, config)
-        l_supcon = self._supcon_loss(z_g, z_theta, labels, config)
-        loss = l_reg + self._lambda_supcon * l_supcon
-
-        batch_size = cast(int, batch.batch_size)
-        self.log("test_loss", loss, prog_bar=True, batch_size=batch_size)
-        self.log("test_l_reg", l_reg, batch_size=batch_size)
-        self.log("test_l_supcon", l_supcon, batch_size=batch_size)
-
         config_cpu = config.detach().cpu()
-        cross_cpu = theta_hat_cross.detach().cpu()
         recon_cpu = theta_hat_recon.detach().cpu()
+        cross_cpu = theta_hat_cross.detach().cpu()
 
         if self._scaler is not None:
             config_cpu = self._scaler.inverse_transform(config_cpu)
-            cross_cpu = self._scaler.inverse_transform(cross_cpu)
             recon_cpu = self._scaler.inverse_transform(recon_cpu)
+            cross_cpu = self._scaler.inverse_transform(cross_cpu)
 
-        for orig, cross, recon in zip(
-            config_cpu.tolist(), cross_cpu.tolist(), recon_cpu.tolist(), strict=True
+        for orig, recon, cross in zip(
+            config_cpu.tolist(), recon_cpu.tolist(), cross_cpu.tolist(), strict=True
         ):
             self._test_rows.append(
                 (cast(list[float], orig), cast(list[float], recon), cast(list[float], cross))

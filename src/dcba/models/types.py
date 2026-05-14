@@ -6,7 +6,7 @@ from torch import Tensor
 
 
 @dataclass
-class EncoderOutput:
+class ForwardOutput:
     """
     Unified return type for all DCBA encoder ``forward()`` methods.
 

@@ -11,7 +11,7 @@ from torch import Tensor
 
 from dcba.dataset import ABCDConfigScaler
 from dcba.dataset.transforms import ABCD_CONFIG_KEYS
-from dcba.models.types import EncoderOutput
+from dcba.models.types import ForwardOutput
 from dcba.wrappers.base import DCBABaseWrapper
 
 
@@ -50,13 +50,13 @@ class DCBAAutoencoderWrapper(DCBABaseWrapper):
         self._loss_fn = loss_fn if loss_fn is not None else nn.MSELoss()
         self._test_rows: list[tuple[list[float], list[float]]] = []
 
-    def forward(self, batch: DCBAHeteroData) -> EncoderOutput:
+    def forward(self, batch: DCBAHeteroData) -> ForwardOutput:
         """
         Run the encoder forward pass.
 
         :param batch: Batched heterogeneous graph data.
 
-        :returns: :class:`~dcba.models.types.EncoderOutput` from the wrapped encoder.
+        :returns: :class:`~dcba.models.types.ForwardOutput` from the wrapped encoder.
         """
         return self._encoder(batch)
 

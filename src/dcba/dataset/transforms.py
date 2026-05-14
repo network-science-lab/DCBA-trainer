@@ -12,7 +12,7 @@ from torch_geometric.transforms import BaseTransform
 ABCD_CONFIG_KEYS: list[str] = ["n", "t1", "t2", "xi", "c_min", "c_max", "d_min", "d_max", "nout"]
 
 
-class ABCDConfig(BaseModel):
+class ABCDConfigSchema(BaseModel):
     """Pydantic schema for the 9-parameter ABCD generator configuration.
 
     Field order matches :data:`ABCD_CONFIG_KEYS`.

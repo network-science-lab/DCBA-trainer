@@ -7,12 +7,15 @@ import torch.nn as nn
 from torch_geometric.transforms import BaseTransform
 
 from dcba.datamodule import ABCDDataModule
-from dcba.dataset import ABCDConfig, ABCDConfigScaler, ABCDConfigToTensor
+from dcba.dataset import ABCDConfigScaler, ABCDConfigSchema, ABCDConfigToTensor
 from dcba.models.config_autoencoder import ConfigAutoEncoder
 from dcba.models.gin_encoder import GINEncoder
 from dcba.training.callbacks import get_callbacks
 from dcba.training.loggers import get_logger
-from dcba.training.loss import ABCDConstraintPenaltyLoss, MultiPositiveSupConLoss
+from dcba.training.loss import (
+    ABCDConstraintPenaltyLoss,
+    MultiPositiveSupConLoss,
+)
 from dcba.wrappers import DCBAAutoencoderWrapper, DCBASupConWrapper
 
 _WRAPPERS = {
@@ -40,7 +43,7 @@ _TRANSFORMS: dict[str, type[BaseTransform]] = {
 }
 
 _CONFIG_SCHEMAS: dict[str, type] = {
-    "ABCDConfig": ABCDConfig,
+    "ABCDConfigSchema": ABCDConfigSchema,
 }
 
 

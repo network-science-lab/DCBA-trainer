@@ -3,7 +3,10 @@
 import torch
 import torch.nn.functional as F
 
-from dcba.training.loss import MultiPositiveSupConLoss
+from dcba.training.loss import (
+    ABCDConstraintPenaltyLoss,
+    MultiPositiveSupConLoss,
+)
 
 
 def _make_batch(
@@ -287,3 +290,148 @@ class TestMultiPositiveSupConLossForward:
 
         assert g.grad is not None
         assert c.grad is not None
+
+
+class TestDirectionalLoss:
+    """Tests for :meth:`MultiPositiveSupConLoss._directional_loss` with precomputed weights."""
+
+    @staticmethod
+    def _make_directional_inputs(
+        b: int, d: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        torch.manual_seed(7)
+        anchors = F.normalize(torch.randn(b, d), dim=-1)
+        others = F.normalize(torch.randn(b, d), dim=-1)
+        labels = torch.arange(b) % 2
+        configs = torch.rand(b, 9)
+        return anchors, others, labels, configs
+
+    def test_precomputed_zero_weights_removes_negatives_from_denominator(self) -> None:
+        """Zero precomputed weights eliminate negatives, making the loss differ from the default."""
+        loss_fn = MultiPositiveSupConLoss()
+        b, d = 4, 16
+        anchors, others, labels, configs = self._make_directional_inputs(b, d)
+
+        # All-zero weights: negatives never appear in the denominator
+        zero_weights = torch.zeros(b, 2 * b)
+        loss_zero_neg = loss_fn._directional_loss(
+            anchors,
+            others,
+            labels,
+            labels,
+            configs,
+            configs,
+            precomputed_neg_weights=zero_weights,
+        )
+        loss_default = loss_fn._directional_loss(anchors, others, labels, labels, configs, configs)
+
+        assert loss_zero_neg.ndim == 0
+        assert not torch.isclose(loss_default, loss_zero_neg), (
+            "Zero neg weights must produce a different loss than internally computed weights"
+        )
+
+    def test_precomputed_weights_matching_internal_gives_same_loss(self) -> None:
+        """Supplying the internally computed weights must reproduce the default loss exactly."""
+        loss_fn = MultiPositiveSupConLoss()
+        b, d = 4, 16
+        anchors, others, labels, configs = self._make_directional_inputs(b, d)
+
+        all_labels = torch.cat([labels, labels])
+        all_configs = torch.cat([configs, configs])
+        pos_mask, self_mask = MultiPositiveSupConLoss._build_masks(
+            labels, all_labels, torch.device("cpu")
+        )
+        internal_weights = loss_fn._negative_weights(configs, all_configs, pos_mask, self_mask)
+
+        loss_precomputed = loss_fn._directional_loss(
+            anchors,
+            others,
+            labels,
+            labels,
+            configs,
+            configs,
+            precomputed_neg_weights=internal_weights,
+        )
+        loss_default = loss_fn._directional_loss(anchors, others, labels, labels, configs, configs)
+
+        assert torch.isclose(loss_precomputed, loss_default), (
+            "Precomputed weights identical to internally computed must give the same loss"
+        )
+
+    def test_precomputed_weights_output_is_scalar_with_grad(self) -> None:
+        """_directional_loss with precomputed_neg_weights returns a differentiable scalar."""
+        loss_fn = MultiPositiveSupConLoss()
+        b, d = 4, 16
+        anchors, others, labels, configs = self._make_directional_inputs(b, d)
+        anchors = anchors.requires_grad_(True)
+
+        uniform_weights = torch.ones(b, 2 * b)
+        loss = loss_fn._directional_loss(
+            anchors,
+            others,
+            labels,
+            labels,
+            configs,
+            configs,
+            precomputed_neg_weights=uniform_weights,
+        )
+        loss.backward()
+
+        assert loss.ndim == 0
+        assert anchors.grad is not None
+
+
+class TestABCDConstraintPenaltyLoss:
+    """Tests for :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`."""
+
+    def _make_valid(self, b: int = 4) -> torch.Tensor:
+        """Return a valid normalised config tensor in [0, 1] satisfying ordering constraints."""
+        x = torch.zeros(b, 9)
+        # n=0.5, t1=0.3, t2=0.3, xi=0.5, c_min=0.1, c_max=0.3, d_min=0.1, d_max=0.3, nout=0.2
+        x[:] = torch.tensor([0.5, 0.3, 0.3, 0.5, 0.1, 0.3, 0.1, 0.3, 0.2])
+        return x
+
+    def test_output_is_scalar(self) -> None:
+        """Loss must be a zero-dimensional scalar."""
+        loss_fn = ABCDConstraintPenaltyLoss()
+        x = self._make_valid()
+        loss = loss_fn(x, x)
+        assert loss.ndim == 0
+
+    def test_no_violation_penalty_close_to_mse(self) -> None:
+        """With no constraint violations the penalty term is zero, so loss equals MSE."""
+        loss_fn = ABCDConstraintPenaltyLoss(lambda_penalty=1.0)
+        x = self._make_valid()
+        target = x.clone()
+        target[:, 0] += 0.1
+        loss = loss_fn(x, target)
+        mse = F.mse_loss(x, target)
+        assert abs(loss.item() - mse.item()) < 1e-6
+
+    def test_violation_increases_loss(self) -> None:
+        """A config that violates c_min <= c_max must produce a higher loss than a valid config."""
+        loss_fn = ABCDConstraintPenaltyLoss(lambda_penalty=1.0)
+        valid = self._make_valid()
+        invalid = valid.clone()
+        invalid[:, 4] = 0.9  # c_min > c_max (0.3)
+        target = valid.clone()
+
+        loss_valid = loss_fn(valid, target)
+        loss_invalid = loss_fn(invalid, target)
+        assert loss_invalid.item() > loss_valid.item()
+
+    def test_backward_passes(self) -> None:
+        """Gradients must flow back through the loss to x_hat."""
+        loss_fn = ABCDConstraintPenaltyLoss()
+        x = self._make_valid().requires_grad_(True)
+        loss_fn(x, self._make_valid()).backward()
+        assert x.grad is not None
+
+    def test_lambda_penalty_scales_penalty(self) -> None:
+        """Doubling lambda_penalty must produce a higher loss for a violating config."""
+        x = self._make_valid()
+        x[:, 4] = 0.9  # force a violation
+        target = self._make_valid()
+        loss_low = ABCDConstraintPenaltyLoss(lambda_penalty=0.1)(x, target)
+        loss_high = ABCDConstraintPenaltyLoss(lambda_penalty=10.0)(x, target)
+        assert loss_high.item() > loss_low.item()

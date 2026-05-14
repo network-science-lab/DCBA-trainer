@@ -45,17 +45,18 @@ class ABCDDataset(Dataset):
         self,
         records: list[InstanceRecord],
         scaler: ABCDConfigScaler | None = None,
-        transform: BaseTransform = ABCDConfigToTensor(),
+        transform: BaseTransform | None = None,
         single_replica_per_instance: bool = True,
     ) -> None:
         """Initialise the dataset, eagerly converting config records to tensors."""
         super().__init__()
+        _transform = transform if transform is not None else ABCDConfigToTensor()
         self._replicas: list[tuple[ReplicaRecord, str, str]] = []
         self._configs: list = []
 
         for record in records:
             config = DCBAInstanceConfig.from_instance_record(record)
-            c = scaler(transform(config)) if scaler is not None else transform(config)
+            c = scaler(_transform(config)) if scaler is not None else _transform(config)
             replica_list = record.replicas[:1] if single_replica_per_instance else record.replicas
             for replica in replica_list:
                 self._replicas.append((replica, record.instance_id, record.net_type))
@@ -66,7 +67,7 @@ class ABCDDataset(Dataset):
         cls,
         report_path: Path,
         scaler: ABCDConfigScaler | None = None,
-        transform: BaseTransform = ABCDConfigToTensor(),
+        transform: BaseTransform | None = None,
     ) -> "ABCDDataset":
         """
         Build a dataset by loading a report.json manifest.

@@ -8,7 +8,7 @@ from dcba_data_set.graph_io import load_report
 from torch_geometric.loader import DataLoader
 from torch_geometric.transforms import BaseTransform
 
-from dcba.dataset import ABCDConfigScaler, ABCDConfigToTensor, ABCDDataset
+from dcba.dataset import ABCDConfigScaler, ABCDDataset
 
 
 class ABCDDataModule(pl.LightningDataModule):
@@ -44,7 +44,7 @@ class ABCDDataModule(pl.LightningDataModule):
         single_replica_per_instance: bool = True,
         seed: int = 42,
         scaler: ABCDConfigScaler | None = None,
-        transform: BaseTransform = ABCDConfigToTensor(),
+        transform: BaseTransform | None = None,
     ) -> None:
         """Initialise the data module with dataset path and split/loader parameters."""
         super().__init__()

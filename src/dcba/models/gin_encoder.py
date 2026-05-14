@@ -5,7 +5,7 @@ from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from torch import Tensor, stack
 from torch_geometric.nn import AttentionalAggregation, GINConv, Sequential
 
-from dcba.models.types import EncoderOutput
+from dcba.models.types import ForwardOutput
 
 
 class LayerwiseAggregation(nn.Module):
@@ -112,15 +112,15 @@ class GINEncoder(nn.Module):
         """
         return self._decoder(z)
 
-    def forward(self, batch: DCBAHeteroData) -> EncoderOutput:
+    def forward(self, batch: DCBAHeteroData) -> ForwardOutput:
         """
         Run the full graph-to-config forward pass.
 
         :param batch: Batched heterogeneous graph data.
 
-        :returns: :class:`~dcba.models.types.EncoderOutput` with ``embedding`` set to ``z_g``
+        :returns: :class:`~dcba.models.types.ForwardOutput` with ``embedding`` set to ``z_g``
             and ``reconstruction`` set to ``theta_hat``.
         """
         z_g = self.encode(batch)
         theta_hat = self.decode(z_g)
-        return EncoderOutput(embedding=z_g, reconstruction=theta_hat)
+        return ForwardOutput(embedding=z_g, reconstruction=theta_hat)
