@@ -1,5 +1,6 @@
 """DCBASupConWrapper -- joint graph + config encoder training with SupCon + regression loss."""
 
+import hashlib
 from typing import cast
 from unittest.mock import MagicMock
 
@@ -83,8 +84,9 @@ class DCBASupConWrapper(DCBABaseWrapper):
 
         :returns: ``(B,)`` int64 tensor of stable, globally unique group indices.
         """
+        # SHA-256 handles any instance_id format; 15 hex chars = 60 bits, fits torch.long.
         return torch.tensor(
-            [int(uid.replace("-", "")[:16], 16) >> 1 for uid in instance_ids],
+            [int(hashlib.sha256(uid.encode()).hexdigest()[:15], 16) for uid in instance_ids],
             dtype=torch.long,
             device=device,
         )
