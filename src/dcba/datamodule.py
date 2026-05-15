@@ -4,7 +4,7 @@ import random
 from pathlib import Path
 
 import lightning.pytorch as pl
-from dcba_data_set.graph_io import load_report
+from dcba_data_set.graph_io import load_dataset
 from torch_geometric.loader import DataLoader
 from torch_geometric.transforms import BaseTransform
 
@@ -19,7 +19,7 @@ class ABCDDataModule(pl.LightningDataModule):
     The ``scaler`` and ``transform`` are injected by the caller (typically the training entry
     point) and stored as public attributes so wrappers can retrieve them at inference time.
 
-    :param report_path: Path to the ``report.json`` manifest.
+    :param dataset_root: Root directory of the dataset (flat or chunked layout).
     :param val_ratio: Fraction of instances to use for validation.
     :param test_ratio: Fraction of instances to use for testing.
     :param batch_size: Number of samples per dataloader batch.
@@ -36,7 +36,7 @@ class ABCDDataModule(pl.LightningDataModule):
 
     def __init__(
         self,
-        report_path: Path,
+        dataset_root: Path,
         val_ratio: float = 0.1,
         test_ratio: float = 0.1,
         batch_size: int = 32,
@@ -48,7 +48,7 @@ class ABCDDataModule(pl.LightningDataModule):
     ) -> None:
         """Initialise the data module with dataset path and split/loader parameters."""
         super().__init__()
-        self._report_path = Path(report_path)
+        self._dataset_root = Path(dataset_root)
         self._val_ratio = val_ratio
         self._test_ratio = test_ratio
         self._batch_size = batch_size
@@ -69,7 +69,7 @@ class ABCDDataModule(pl.LightningDataModule):
         :param stage: Lightning stage identifier (``"fit"``, ``"test"``, etc.).
             Unused here — all splits are always prepared.
         """
-        records = load_report(self._report_path)
+        records = load_dataset(self._dataset_root)
         random.Random(self._seed).shuffle(records)
         instance_ids = [r.instance_id for r in records]
         n = len(instance_ids)

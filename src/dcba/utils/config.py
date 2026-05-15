@@ -10,7 +10,7 @@ def load_config(cfg: DictConfig) -> dict:
     """
     Convert a Hydra DictConfig to a plain dict and attach Hydra runtime metadata.
 
-    ``data.report_path`` is treated as a path relative to ``DATA_ROOT`` (i.e. the
+    ``data.dataset_root`` is treated as a path relative to ``DATA_ROOT`` (i.e. the
     ``DCBA_DATA_ROOT`` environment variable) and is resolved to an absolute path here.
 
     :param cfg: The Hydra-managed config object passed to the ``@hydra.main`` function.
@@ -20,5 +20,5 @@ def load_config(cfg: DictConfig) -> dict:
     """
     config = OmegaConf.to_container(cfg, resolve=True)
     config["hydra"] = OmegaConf.to_container(HydraConfig.get(), resolve=False)
-    config["data"]["report_path"] = str(DATA_ROOT / config["data"]["report_path"])
+    config["data"]["dataset_root"] = str(DATA_ROOT / config["data"]["dataset_root"])
     return config

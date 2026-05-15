@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from dcba_data_set.graph_io import load_report
+from dcba_data_set.graph_io import load_dataset
 from dcba_data_set.graph_io.data_models import (
     DCBAHeteroData,
     DCBAInstanceConfig,
@@ -29,7 +29,7 @@ class ABCDDataset(Dataset):
     produces a tensor, normalising each feature to ``[0, 1]``.
 
     :param records: List of :class:`~dcba_data_set.graph_io.data_models.InstanceRecord` objects,
-        as returned by :func:`~dcba_data_set.graph_io.load_report`.
+        as returned by :func:`~dcba_data_set.graph_io.load_dataset`.
     :param scaler: Optional scaler applied after the transform.  When ``None``, config values are
         returned in their raw (unscaled) form.
     :param transform: Transform applied to each
@@ -62,24 +62,24 @@ class ABCDDataset(Dataset):
                 self._configs.append(c)
 
     @classmethod
-    def from_report(
+    def from_dataset(
         cls,
-        report_path: Path,
+        dataset_root: Path,
         scaler: ABCDConfigScaler | None = None,
         transform: BaseTransform | None = None,
     ) -> "ABCDDataset":
         """
-        Build a dataset by loading a report.json manifest.
+        Build a dataset from a dataset directory (flat or chunked layout).
 
-        :param report_path: Path to the ``report.json`` produced by
+        :param dataset_root: Root directory of the dataset, as produced by
             :class:`~dcba_data_set.ds_generator.DatasetGenerator`.
         :param scaler: Optional scaler applied after the transform.
         :param transform: Transform applied to each config record.  Defaults to
             :class:`~dcba.dataset.transforms.ABCDConfigToTensor`.
 
-        :returns: A :class:`ABCDDataset` constructed from all records in the report.
+        :returns: A :class:`ABCDDataset` constructed from all records in the dataset.
         """
-        return cls(records=load_report(report_path), scaler=scaler, transform=transform)
+        return cls(records=load_dataset(dataset_root), scaler=scaler, transform=transform)
 
     def __len__(self) -> int:
         """Return the number of replica entries in the dataset."""
