@@ -70,6 +70,7 @@ class GINEncoder(nn.Module):
             layers.append((GINConv(nn=mlp, train_eps=True), "x, edge_index -> x"))
             if i < len(enc_dims) - 2:
                 layers.append(nn.ReLU())
+                layers.append(nn.BatchNorm1d(enc_dims[i + 1]))
 
         self._encoder = Sequential("x, edge_index", layers)
         self._dropout = nn.Dropout(dropout)
