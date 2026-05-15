@@ -1,8 +1,12 @@
 """Multi-positive supervised contrastive loss with embedding queue and NLS weighting."""
 
+import logging
+
 import torch
 import torch.nn as nn
 from torch import Tensor
+
+_log = logging.getLogger(__name__)
 
 
 class MultiPositiveSupConLoss(nn.Module):
@@ -165,10 +169,12 @@ class MultiPositiveSupConLoss(nn.Module):
 
         pos_mask, self_mask = self._build_masks(anchor_labels, all_labels, sim.device)
         if not pos_mask.any():
-            raise ValueError(
-                "MultiPositiveSupConLoss: no valid positives found in this batch. "
-                "Each sample has a distinct label -- contrastive loss is undefined."
+            _log.warning(
+                "MultiPositiveSupConLoss: no valid positives found in this batch "
+                "(all %d samples have distinct labels) -- returning zero loss.",
+                anchor_labels.size(0),
             )
+            return torch.tensor(0.0, device=anchors.device, dtype=anchors.dtype, requires_grad=True)
         if precomputed_neg_weights is not None:
             neg_mask = ~pos_mask & ~self_mask
             neg_weight = precomputed_neg_weights * neg_mask.float()
