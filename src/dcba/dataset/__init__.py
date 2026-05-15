@@ -7,6 +7,7 @@ from dcba.dataset.transforms import (
     ABCDConfigScaler,
     ABCDConfigSchema,
     ABCDConfigToTensor,
+    CommunityToSize,
     abcd_param_bounds,
 )
 
@@ -15,6 +16,7 @@ __all__ = [
     "ABCDConfigSchema",
     "ABCDConfigToTensor",
     "ABCDConfigScaler",
+    "CommunityToSize",
     "ABCD_CONFIG_KEYS",
     "ABCD_INT_FEATURE_INDICES",
     "abcd_param_bounds",

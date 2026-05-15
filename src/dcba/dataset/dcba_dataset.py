@@ -9,11 +9,10 @@ from dcba_data_set.graph_io.data_models import (
     InstanceRecord,
     ReplicaRecord,
 )
-from torch import zeros
 from torch.utils.data import Dataset
 from torch_geometric.transforms import BaseTransform
 
-from dcba.dataset.transforms import ABCDConfigScaler, ABCDConfigToTensor
+from dcba.dataset.transforms import ABCDConfigScaler, ABCDConfigToTensor, CommunityToSize
 
 
 class ABCDDataset(Dataset):
@@ -98,6 +97,6 @@ class ABCDDataset(Dataset):
         replica, instance_id, net_type = self._replicas[idx]
         g = DCBAHeteroData.from_replica_record(replica, instance_id, net_type)
         c = self._configs[idx]
-        g["actor"].x = zeros((len(g.actors_map), 5))
+        g = CommunityToSize()(g)
         g.config = c
         return g

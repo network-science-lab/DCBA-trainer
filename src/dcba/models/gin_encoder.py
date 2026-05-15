@@ -92,7 +92,7 @@ class GINEncoder(nn.Module):
 
         :returns: Embedding tensor of shape ``(batch, embedding_dim)``.
         """
-        x = self.input_proj(data["actor"].community.float())
+        x = self.input_proj(data["actor"].x)
 
         y_relations = {}
         for relation, edge_index in data.edge_index_dict.items():
