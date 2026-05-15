@@ -97,16 +97,19 @@ class DCBASupConWrapper(DCBABaseWrapper):
         z_g = F.normalize(self._graph_encoder.encode(batch), dim=-1)
         z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
         theta_hat = self._config_encoder.decode(z_theta)
+        theta_g_hat = self._config_encoder.decode(z_g)
 
         labels = self._instance_labels(cast(list[str], batch.instance_id), device=z_g.device)
 
         l_reg = self._reg_loss(theta_hat, config)
+        l_reg_g = self._reg_loss(theta_g_hat, config)
         l_supcon = self._supcon_loss(z_g, z_theta, labels, config)
-        loss = l_reg + self._lambda_supcon * l_supcon
+        loss = l_reg_g + l_reg + self._lambda_supcon * l_supcon
 
         batch_size = cast(int, batch.batch_size)
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch_size)
         self.log(f"{stage}_l_reg", l_reg, batch_size=batch_size)
+        self.log(f"{stage}_l_reg_g", l_reg_g, batch_size=batch_size)
         self.log(f"{stage}_l_supcon", l_supcon, batch_size=batch_size)
         return loss
 
