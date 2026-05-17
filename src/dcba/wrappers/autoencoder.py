@@ -60,12 +60,12 @@ class DCBAAutoencoderWrapper(DCBABaseWrapper):
         """
         return self._encoder(batch)
 
-    def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
+    def _step(self, batch: DCBAHeteroData, stage: str) -> tuple[Tensor]:
         config = self._unpack_batch(batch)
         out = self._encoder(batch)
         loss = self._loss_fn(out.reconstruction, config)
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch.batch_size)
-        return loss
+        return (loss,)
 
     def test_step(
         self,

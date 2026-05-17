@@ -66,7 +66,7 @@ class DCBASupConWrapper(DCBABaseWrapper):
         self._reg_loss = reg_loss
         self._supcon_loss = supcon_loss
         self._scaler = scaler
-        self._test_rows: list[tuple[list[float], list[float], list[float]]] = []
+        self._test_rows: list[tuple[str, int, list[float], list[float], list[float]]] = []
 
     @staticmethod
     def _instance_labels(instance_ids: list[str], device: torch.device) -> Tensor:
@@ -91,52 +91,58 @@ class DCBASupConWrapper(DCBABaseWrapper):
             device=device,
         )
 
-    def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
+    def _step(self, batch: DCBAHeteroData, stage: str) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         config = self._unpack_batch(batch)
 
         z_g = F.normalize(self._graph_encoder.encode(batch), dim=-1)
         z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
-        theta_hat = self._config_encoder.decode(z_theta)
-        theta_g_hat = self._config_encoder.decode(z_g)
+        theta_hat_zt = self._config_encoder.decode(z_theta)
+        theta_hat_zg = self._config_encoder.decode(z_g)
 
         labels = self._instance_labels(cast(list[str], batch.instance_id), device=z_g.device)
 
-        l_reg = self._reg_loss(theta_hat, config)
-        l_reg_g = self._reg_loss(theta_g_hat, config)
+        l_reg_zt = self._reg_loss(theta_hat_zt, config)
+        l_reg_zg = self._reg_loss(theta_hat_zg, config)
         l_supcon = self._supcon_loss(z_g, z_theta, labels, config)
-        loss = l_reg_g + l_reg + self._lambda_supcon * l_supcon
+        loss = l_reg_zg + l_reg_zt + self._lambda_supcon * l_supcon
 
         batch_size = cast(int, batch.batch_size)
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch_size)
-        self.log(f"{stage}_l_reg", l_reg, batch_size=batch_size)
-        self.log(f"{stage}_l_reg_g", l_reg_g, batch_size=batch_size)
-        self.log(f"{stage}_l_supcon", l_supcon, batch_size=batch_size)
-        return loss
+        self.log(f"{stage}_loss-reg-t", l_reg_zt, batch_size=batch_size)
+        self.log(f"{stage}_loss-reg-g", l_reg_zg, batch_size=batch_size)
+        self.log(f"{stage}_loss-contr", l_supcon, batch_size=batch_size)
+        return loss, config, theta_hat_zt, theta_hat_zg
 
     def test_step(self, batch: DCBAHeteroData, batch_idx: int) -> None:
         """Compute and log test loss; accumulate per-sample rows for the prediction table."""
-        self._step(batch, "test")
-
-        config = self._unpack_batch(batch)
-        z_g = F.normalize(self._graph_encoder.encode(batch), dim=-1)
-        z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
-        theta_hat_recon = self._config_encoder.decode(z_theta)
-        theta_hat_cross = self._config_encoder.decode(z_g)
+        loss, config, theta_hat_zt, theta_hat_zg = self._step(batch, "test")
 
         config_cpu = config.detach().cpu()
-        recon_cpu = theta_hat_recon.detach().cpu()
-        cross_cpu = theta_hat_cross.detach().cpu()
+        recon_cpu = theta_hat_zt.detach().cpu()
+        cross_cpu = theta_hat_zg.detach().cpu()
+        replicas = batch.replica.detach().cpu()
 
         if self._scaler is not None:
             config_cpu = self._scaler.inverse_transform(config_cpu)
             recon_cpu = self._scaler.inverse_transform(recon_cpu)
             cross_cpu = self._scaler.inverse_transform(cross_cpu)
 
-        for orig, recon, cross in zip(
-            config_cpu.tolist(), recon_cpu.tolist(), cross_cpu.tolist(), strict=True
+        for instance_id, replica, orig, recon, cross in zip(
+            cast(list[str], batch.instance_id),
+            replicas.tolist(),
+            config_cpu.tolist(),
+            recon_cpu.tolist(),
+            cross_cpu.tolist(),
+            strict=True,
         ):
             self._test_rows.append(
-                (cast(list[float], orig), cast(list[float], recon), cast(list[float], cross))
+                (
+                    instance_id,
+                    replica,
+                    cast(list[float], orig),
+                    cast(list[float], recon),
+                    cast(list[float], cross),
+                )
             )
 
     def on_test_epoch_end(self) -> None:
@@ -144,9 +150,9 @@ class DCBASupConWrapper(DCBABaseWrapper):
 
         Each sample occupies three rows:
 
-        - ``{i}-o``: original θ
-        - ``{i}-r``: MLP reconstruction -- ``config_encoder.decode(config_encoder.encode(θ))``
-        - ``{i}-c``: cross-modal prediction -- ``config_encoder.decode(graph_encoder.encode(G))``
+        - ``{i}-orig``: original θ
+        - ``{i}-regr``: MLP reconstruction - ``config_encoder.decode(config_encoder.encode(θ))``
+        - ``{i}-crsm``: cross-modal prediction - ``config_encoder.decode(graph_encoder.encode(G))``
         """
         if not isinstance(self.logger, WandbLogger):
             return
@@ -154,11 +160,11 @@ class DCBASupConWrapper(DCBABaseWrapper):
             return
 
         suffix = "" if self._scaler is not None else "_norm"
-        columns = ["sample"] + [f"{k}{suffix}" for k in ABCD_CONFIG_KEYS]
+        columns = ["sample", "instance", "replica"] + [f"{k}{suffix}" for k in ABCD_CONFIG_KEYS]
         rows = []
-        for i, (orig, recon, cross) in enumerate(self._test_rows):
-            rows.append([f"{i}-o"] + orig)
-            rows.append([f"{i}-r"] + recon)
-            rows.append([f"{i}-c"] + cross)
+        for i, (instance, replica, orig, recon, cross) in enumerate(self._test_rows):
+            rows.append([f"{i}-orig", instance, replica] + orig)
+            rows.append([f"{i}-regr", instance, replica] + recon)
+            rows.append([f"{i}-crsm", instance, replica] + cross)
         table = wandb.Table(columns=columns, data=rows)
         self.logger.experiment.log({"test/predictions": table})
