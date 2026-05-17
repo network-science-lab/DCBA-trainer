@@ -1,5 +1,6 @@
 """Generic dataset for DCBA configuration records."""
 
+import random
 from pathlib import Path
 
 from dcba_data_set.graph_io import load_dataset
@@ -50,16 +51,16 @@ class ABCDDataset(Dataset):
         """Initialise the dataset, eagerly converting config records to tensors."""
         super().__init__()
         _transform = transform if transform is not None else ABCDConfigToTensor()
-        self._replicas: list[tuple[ReplicaRecord, str, str]] = []
-        self._configs: list = []
+        self._items: list[tuple[ReplicaRecord, str, str, object]] = []
 
         for record in records:
             config = DCBAInstanceConfig.from_instance_record(record)
             c = scaler(_transform(config)) if scaler is not None else _transform(config)
             replica_list = record.replicas[:1] if single_replica_per_instance else record.replicas
             for replica in replica_list:
-                self._replicas.append((replica, record.instance_id, record.net_type))
-                self._configs.append(c)
+                self._items.append((replica, record.instance_id, record.net_type, c))
+
+        random.shuffle(self._items)
 
     @classmethod
     def from_dataset(
@@ -83,7 +84,7 @@ class ABCDDataset(Dataset):
 
     def __len__(self) -> int:
         """Return the number of replica entries in the dataset."""
-        return len(self._configs)
+        return len(self._items)
 
     def __getitem__(self, idx: int) -> DCBAHeteroData:
         """
@@ -94,9 +95,8 @@ class ABCDDataset(Dataset):
         :returns: A :class:`~dcba_data_set.graph_io.data_models.DCBAHeteroData` with the config
             representation attached as ``.config``.
         """
-        replica, instance_id, net_type = self._replicas[idx]
+        replica, instance_id, net_type, c = self._items[idx]
         g = DCBAHeteroData.from_replica_record(replica, instance_id, net_type)
-        c = self._configs[idx]
         g = CommunityToSize()(g)
         g.config = c
         return g

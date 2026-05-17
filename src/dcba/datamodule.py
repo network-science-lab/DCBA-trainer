@@ -121,7 +121,7 @@ class ABCDDataModule(pl.LightningDataModule):
         return DataLoader(
             self._val_dataset,
             batch_size=self._batch_size,
-            shuffle=False,
+            shuffle=True,
             num_workers=self._num_workers,
         )
 
@@ -130,6 +130,6 @@ class ABCDDataModule(pl.LightningDataModule):
         return DataLoader(
             self._test_dataset,
             batch_size=self._batch_size,
-            shuffle=False,
+            shuffle=True,
             num_workers=self._num_workers,
         )

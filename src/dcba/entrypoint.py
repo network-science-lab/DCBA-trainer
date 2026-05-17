@@ -11,7 +11,7 @@ load_dotenv()  # populate os.environ from .env if present; no-op otherwise
 _CONFIGS_PATH = Path(__file__).parent.parent.parent / "configs"
 
 
-@hydra.main(version_base=None, config_path=str(_CONFIGS_PATH), config_name="config-autoencoder")
+@hydra.main(version_base=None, config_path=str(_CONFIGS_PATH), config_name="gnn-supcon")
 def main(cfg: DictConfig) -> None:
     """
     Load config and launch the training loop.

@@ -87,7 +87,7 @@ class MultiPositiveSupConLoss(nn.Module):
         """
         Compute soft negative weights from pairwise config distances.
 
-        ``w_ij = exp(-||θ_i - θ_j|| / tau_dist)`` for negative pairs, 0 elsewhere.
+        ``w_ij = 1 - exp(-||θ_i - θ_j|| / tau_dist)`` for negative pairs, 0 elsewhere.
 
         :param anchor_configs: ``(B_a, C)`` config vectors for the anchors.
         :param all_configs: ``(B_a + B_k, C)`` config vectors for the full key pool.
@@ -97,7 +97,7 @@ class MultiPositiveSupConLoss(nn.Module):
         :returns: ``(B_a, B_a + B_k)`` float weight matrix, zero on positive and self entries.
         """
         dist = torch.cdist(anchor_configs, all_configs, p=2)  # (B_a, B_a + B_k)
-        weights = torch.exp(-dist / self.tau_dist)
+        weights = 1.0 - torch.exp(-dist / self.tau_dist)
         neg_mask = ~pos_mask & ~self_mask
         return weights * neg_mask.float()
 
