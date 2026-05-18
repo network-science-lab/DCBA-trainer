@@ -4,6 +4,8 @@ import torch.nn as nn
 from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from torch import Tensor
 
+from dcba.models.types import ForwardOutput
+
 
 class ConfigAutoEncoder(nn.Module):
     """
@@ -63,17 +65,17 @@ class ConfigAutoEncoder(nn.Module):
         """
         return self._decoder(z)
 
-    def forward(self, x: tuple[Tensor, DCBAHeteroData]) -> tuple[Tensor, Tensor]:
+    def forward(self, batch: DCBAHeteroData) -> ForwardOutput:
         """
         Run the full autoencoder pass.
 
-        :param x: Tuple of ``(config, graph)`` where ``config`` is a float tensor of shape
-            ``(batch, input_dim)`` and ``graph`` is :class:`DCBAHeteroData` (unused).
+        :param batch: Batched heterogeneous graph data; the numeric config tensor is read from
+            ``batch.config``.
 
-        :returns: Tuple ``(z_theta, theta_hat)`` where ``z_theta`` is the embedding and
-            ``theta_hat`` is the reconstruction.
+        :returns: :class:`~dcba.models.types.ForwardOutput` with ``embedding`` set to
+            ``z_theta`` and ``reconstruction`` set to ``theta_hat``.
         """
-        config, _ = x
+        config = batch.config.reshape(batch.batch_size, -1)
         z_theta = self.encode(config)
         theta_hat = self.decode(z_theta)
-        return z_theta, theta_hat
+        return ForwardOutput(embedding=z_theta, reconstruction=theta_hat)

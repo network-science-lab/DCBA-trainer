@@ -46,7 +46,9 @@ def get_callbacks(config: dict) -> list[Callback]:
         elif name == "gradient_accumulation_scheduler":
             gradient_scheduling = cb["gradient_scheduling"]
             scheduling = (
-                gradient_scheduling if gradient_scheduling is dict else {0: gradient_scheduling}
+                gradient_scheduling
+                if isinstance(gradient_scheduling, dict)
+                else {0: gradient_scheduling}
             )
             callbacks.append(GradientAccumulationScheduler(scheduling=scheduling))
         elif name == "model_summary":

@@ -4,11 +4,30 @@ from functools import lru_cache
 
 import torch
 from dcba_data_set.graph_io.data_models import DCBAInstanceConfig
+from pydantic import BaseModel
 from torch import Tensor
 from torch_geometric.transforms import BaseTransform
 
 #: Ordered list of numerical ABCD config keys used as model input features.
 ABCD_CONFIG_KEYS: list[str] = ["n", "t1", "t2", "xi", "c_min", "c_max", "d_min", "d_max", "nout"]
+
+
+class ABCDConfigSchema(BaseModel):
+    """Pydantic schema for the 9-parameter ABCD generator configuration.
+
+    Field order matches :data:`ABCD_CONFIG_KEYS`.
+    """
+
+    n: float
+    t1: float
+    t2: float
+    xi: float
+    c_min: float
+    c_max: float
+    d_min: float
+    d_max: float
+    nout: float
+
 
 #: Indices within :data:`ABCD_CONFIG_KEYS` that correspond to integer-valued parameters.
 ABCD_INT_FEATURE_INDICES: list[int] = [0, 4, 5, 6, 7, 8]  # n, c_min, c_max, d_min, d_max, nout

@@ -6,7 +6,11 @@ random_seed: 42
 
 data:
   report_path: "abcd-interim/report.json"
-  n_max: 10000 # upper bound for all node-count-dependent scaler features
+  transform: ABCDConfigToTensor
+  scaler:
+    name: ABCDConfigScaler
+    args:
+      n_max: 10000 # upper bound for all node-count-dependent scaler features
   val_ratio: 0.10
   test_ratio: 0.10
   batch_size: 16 # small enough for interim dataset; scale to ~256 (K>=32 configs x N graphs) for production
@@ -28,7 +32,7 @@ models:
 training:
   wrapper: supcon
   accelerator: gpu
-  devices: [0]
+  devices: [0] # must be a list of GPU indices, e.g. [0] or [1]; integer form is not supported
   max_epochs: 200
   losses:
     reg:
