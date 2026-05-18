@@ -26,13 +26,13 @@ models:
   theta:
     cls: ConfigAutoEncoder
     input_dim: 9
-    hidden_dims: [256, 128, 64]
+    hidden_dims: [16]
     embedding_dim: 32 # must match models.graph.embedding_dim
 
 training:
   wrapper: supcon
   accelerator: gpu
-  devices: [2] # must be a list of GPU indices, e.g. [0] or [1]; integer form is not supported
+  devices: [0] # must be a list of GPU indices, e.g. [0] or [1]; integer form is not supported
   max_epochs: 200
   losses:
     reg:
@@ -43,7 +43,7 @@ training:
       # args: {}
     repr:
       name: supcon
-      weight: 0.15
+      weight: 0.3
       args:
         temperature: 0.07
         tau_dist: 1.0
@@ -56,7 +56,7 @@ training:
   logger:
     project: dcba
     name: mm-supcon
-    tags: [supcon, abcd-constraint-double, expand-compress-gnn, bidirectional, theta2-56-128-64, weak-supcon, big-dataset]
+    tags: [big-dataset, fixed-supcon, tiny-mlp]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss
@@ -67,7 +67,7 @@ training:
     - name: early_stopping
       monitor: val_loss
       mode: min
-      patience: 20
+      patience: 5
     - name: gradient_accumulation_scheduler
       gradient_scheduling: 4 # effective batch = gradient_scheduling * batch_size = 4 * 16 = 64
     - name: model_summary
