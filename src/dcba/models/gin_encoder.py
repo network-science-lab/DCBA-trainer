@@ -2,32 +2,11 @@
 
 import torch.nn as nn
 from dcba_data_set.graph_io.data_models import DCBAHeteroData
-from torch import Tensor, stack
+from torch import Tensor
 from torch_geometric.nn import AttentionalAggregation, GINConv, Sequential
 
+from dcba.models.aggregators import LayerwiseAggregation
 from dcba.models.types import ForwardOutput
-
-
-class LayerwiseAggregation(nn.Module):
-    """Auxiliary class for trainable custom aggregation of mln-layers embeddings."""
-
-    def __init__(self, hidden_channels: int) -> None:
-        """Initialise the object."""
-        super().__init__()
-        self.attn = nn.Linear(hidden_channels, 1)
-
-    def forward(self, h: dict[str, Tensor]) -> Tensor:
-        """
-        Trainable aggregation of mln layers' embeddings.
-
-        :param h: mln layers' embeddings dict ``{nb_mln_layers: [hidden_dim, nb_mln_actors]}``.
-
-        :returns: A tensor of shape ``[hidden_dim, nb_mln_actors]``.
-        """
-        stacked = stack(list(h.values()))
-        attn_scores = self.attn(stacked)
-        attn_scores = nn.functional.softmax(attn_scores, dim=0)
-        return (attn_scores * stacked).sum(dim=0)
 
 
 class GINEncoder(nn.Module):
