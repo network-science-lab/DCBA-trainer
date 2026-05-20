@@ -70,6 +70,7 @@ class GINEncoder(nn.Module):
             layers.append((GINConv(nn=mlp, train_eps=True), "x, edge_index -> x"))
             if i < len(enc_dims) - 2:
                 layers.append(nn.ReLU())
+                layers.append(nn.BatchNorm1d(enc_dims[i + 1]))
 
         self._encoder = Sequential("x, edge_index", layers)
         self._dropout = nn.Dropout(dropout)
@@ -92,7 +93,7 @@ class GINEncoder(nn.Module):
 
         :returns: Embedding tensor of shape ``(batch, embedding_dim)``.
         """
-        x = self.input_proj(data["actor"].community.float())
+        x = self.input_proj(data["actor"].x)
 
         y_relations = {}
         for relation, edge_index in data.edge_index_dict.items():

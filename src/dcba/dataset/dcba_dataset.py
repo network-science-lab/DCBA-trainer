@@ -1,19 +1,19 @@
 """Generic dataset for DCBA configuration records."""
 
+import random
 from pathlib import Path
 
-from dcba_data_set.graph_io import load_report
+from dcba_data_set.graph_io import load_dataset
 from dcba_data_set.graph_io.data_models import (
     DCBAHeteroData,
     DCBAInstanceConfig,
     InstanceRecord,
     ReplicaRecord,
 )
-from torch import zeros
 from torch.utils.data import Dataset
 from torch_geometric.transforms import BaseTransform
 
-from dcba.dataset.transforms import ABCDConfigScaler, ABCDConfigToTensor
+from dcba.dataset.transforms import ABCDConfigScaler, ABCDConfigToTensor, CommunityToSize
 
 
 class ABCDDataset(Dataset):
@@ -30,7 +30,7 @@ class ABCDDataset(Dataset):
     produces a tensor, normalising each feature to ``[0, 1]``.
 
     :param records: List of :class:`~dcba_data_set.graph_io.data_models.InstanceRecord` objects,
-        as returned by :func:`~dcba_data_set.graph_io.load_report`.
+        as returned by :func:`~dcba_data_set.graph_io.load_dataset`.
     :param scaler: Optional scaler applied after the transform.  When ``None``, config values are
         returned in their raw (unscaled) form.
     :param transform: Transform applied to each
@@ -51,40 +51,40 @@ class ABCDDataset(Dataset):
         """Initialise the dataset, eagerly converting config records to tensors."""
         super().__init__()
         _transform = transform if transform is not None else ABCDConfigToTensor()
-        self._replicas: list[tuple[ReplicaRecord, str, str]] = []
-        self._configs: list = []
+        self._items: list[tuple[ReplicaRecord, str, str, object]] = []
 
         for record in records:
             config = DCBAInstanceConfig.from_instance_record(record)
             c = scaler(_transform(config)) if scaler is not None else _transform(config)
             replica_list = record.replicas[:1] if single_replica_per_instance else record.replicas
             for replica in replica_list:
-                self._replicas.append((replica, record.instance_id, record.net_type))
-                self._configs.append(c)
+                self._items.append((replica, record.instance_id, record.net_type, c))
+
+        random.shuffle(self._items)
 
     @classmethod
-    def from_report(
+    def from_dataset(
         cls,
-        report_path: Path,
+        dataset_root: Path,
         scaler: ABCDConfigScaler | None = None,
         transform: BaseTransform | None = None,
     ) -> "ABCDDataset":
         """
-        Build a dataset by loading a report.json manifest.
+        Build a dataset from a dataset directory (flat or chunked layout).
 
-        :param report_path: Path to the ``report.json`` produced by
+        :param dataset_root: Root directory of the dataset, as produced by
             :class:`~dcba_data_set.ds_generator.DatasetGenerator`.
         :param scaler: Optional scaler applied after the transform.
         :param transform: Transform applied to each config record.  Defaults to
             :class:`~dcba.dataset.transforms.ABCDConfigToTensor`.
 
-        :returns: A :class:`ABCDDataset` constructed from all records in the report.
+        :returns: A :class:`ABCDDataset` constructed from all records in the dataset.
         """
-        return cls(records=load_report(report_path), scaler=scaler, transform=transform)
+        return cls(records=load_dataset(dataset_root), scaler=scaler, transform=transform)
 
     def __len__(self) -> int:
         """Return the number of replica entries in the dataset."""
-        return len(self._configs)
+        return len(self._items)
 
     def __getitem__(self, idx: int) -> DCBAHeteroData:
         """
@@ -95,9 +95,8 @@ class ABCDDataset(Dataset):
         :returns: A :class:`~dcba_data_set.graph_io.data_models.DCBAHeteroData` with the config
             representation attached as ``.config``.
         """
-        replica, instance_id, net_type = self._replicas[idx]
+        replica, instance_id, net_type, c = self._items[idx]
         g = DCBAHeteroData.from_replica_record(replica, instance_id, net_type)
-        c = self._configs[idx]
-        g["actor"].x = zeros((len(g.actors_map), 5))
+        g = CommunityToSize()(g)
         g.config = c
         return g

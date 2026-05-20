@@ -138,8 +138,8 @@ class TestNegativeWeights:
         assert (weights[pos_mask] == 0).all(), "Weights must be 0 on positive entries"
         assert (weights[self_mask] == 0).all(), "Weights must be 0 on self entries"
 
-    def test_closer_configs_higher_weight(self) -> None:
-        """Identical configs produce higher negative weight than distant configs."""
+    def test_closer_configs_lower_weight(self) -> None:
+        """Distant configs produce higher negative weight than identical configs."""
         loss_fn = MultiPositiveSupConLoss(tau_dist=1.0)
         b, c = 4, 9
         labels = torch.tensor([0, 0, 1, 1])
@@ -154,8 +154,8 @@ class TestNegativeWeights:
         w_close = loss_fn._negative_weights(configs_close, all_close, pos_mask, self_mask)
         w_far = loss_fn._negative_weights(configs_far, all_far, pos_mask, self_mask)
 
-        assert w_close[0, 2].item() > w_far[0, 2].item(), (
-            "Identical configs should produce higher negative weight than distant configs"
+        assert w_far[0, 2].item() > w_close[0, 2].item(), (
+            "Distant configs should produce higher negative weight than identical configs"
         )
 
     def test_output_shape(self) -> None:

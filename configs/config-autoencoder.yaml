@@ -5,8 +5,8 @@ hydra:
 random_seed: 42
 
 data:
-  report_path: "abcd-interim/report.json"
-  # report_path: "test/dataset_abcd/report.json"
+  dataset_root: "abcd-interim"
+  # dataset_root: "test/dataset_abcd"
   transform: ABCDConfigToTensor
   scaler:
     name: ABCDConfigScaler

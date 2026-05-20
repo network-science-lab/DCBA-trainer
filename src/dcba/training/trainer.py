@@ -139,7 +139,7 @@ def train(config: dict) -> None:
     scaler = _build_scaler(data_cfg.get("scaler"))
     transform = _build_transform(data_cfg.get("transform"))
     datamodule = ABCDDataModule(
-        report_path=Path(data_cfg["report_path"]),
+        dataset_root=Path(data_cfg["dataset_root"]),
         val_ratio=data_cfg["val_ratio"],
         test_ratio=data_cfg["test_ratio"],
         batch_size=data_cfg["batch_size"],

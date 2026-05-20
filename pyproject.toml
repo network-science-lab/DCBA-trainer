@@ -1,6 +1,6 @@
 [project]
 name = "dcba"
-version = "0.9.0"
+version = "0.10.0"
 description = "Graph configuration retrieval: recover ABCD generator parameters from a given graph via contrastive learning."
 readme = "README.md"
 authors = [

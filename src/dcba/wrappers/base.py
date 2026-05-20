@@ -28,12 +28,12 @@ class DCBABaseWrapper(pl.LightningModule):
         """Reshape and return the config tensor; used as encoder input and regression target."""
         return batch.config.reshape(batch.batch_size, -1)
 
-    def _step(self, batch: DCBAHeteroData, stage: str) -> Tensor:
+    def _step(self, batch: DCBAHeteroData, stage: str) -> tuple[Tensor, ...]:
         raise NotImplementedError
 
     def training_step(self, batch: DCBAHeteroData, batch_idx: int) -> Tensor:
         """Compute and log training loss."""
-        return self._step(batch, "train")
+        return self._step(batch, "train")[0]
 
     def validation_step(self, batch: DCBAHeteroData, batch_idx: int) -> None:
         """Compute and log validation loss."""
