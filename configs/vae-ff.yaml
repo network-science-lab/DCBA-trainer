@@ -36,6 +36,7 @@ training:
     kl:
       name: kl_divergence
       beta: 0.01
+      warmup_epochs: 3
   optimizer:
     name: AdamW
     args:

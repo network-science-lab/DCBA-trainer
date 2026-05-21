@@ -2,6 +2,7 @@
 
 import lightning.pytorch as pl
 import torch
+import torch.nn as nn
 from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from torch import Tensor
 
@@ -13,7 +14,8 @@ class DCBABaseWrapper(pl.LightningModule):
     Abstract base for DCBA LightningModule wrappers.
 
     Provides shared boilerplate: batch unpacking, train/val step dispatch,
-    scaler management, test-row reset, and AdamW optimiser construction.
+    scaler management, test-row reset, AdamW optimiser construction, and optional
+    KL divergence regularisation for :class:`~dcba.models.config_vae.ConfigVAE` encoders.
     Subclasses must implement :meth:`_step`.
     """
 
@@ -23,6 +25,40 @@ class DCBABaseWrapper(pl.LightningModule):
         self._optimizer_config: dict = {}
         self._scaler: ABCDConfigScaler | None = None
         self._test_rows: list = []
+        # KL attributes -- set by subclasses that use a ConfigVAE config encoder.
+        self._kl_loss: nn.Module | None = None
+        self._beta_kl: float = 1.0
+        self._kl_warmup_epochs: int = 0
+        self._kl_warmup_steps: int = 0  # resolved in on_train_start
+
+    def on_train_start(self) -> None:
+        """Convert KL warmup epochs to steps using the actual number of batches per epoch."""
+        if self._kl_loss is not None and self._kl_warmup_epochs > 0:
+            self._kl_warmup_steps = self._kl_warmup_epochs * self.trainer.num_training_batches
+
+    def _kl_term(self, encoder: nn.Module, config: Tensor, batch_size: int, stage: str) -> Tensor:
+        """
+        Compute the beta-annealed KL term and log raw KL and effective beta.
+
+        :param encoder: Config encoder; must expose ``encode_distribution`` (i.e. ConfigVAE).
+        :param config: Ground-truth config tensor of shape ``(batch, input_dim)``.
+        :param batch_size: Batch size for Lightning logging.
+        :param stage: One of ``"train"``, ``"val"``, ``"test"``.
+
+        :returns: Scalar ``effective_beta * KL``, ready to add to the total loss.
+        """
+        mu, log_sigma = encoder.encode_distribution(config)  # type: ignore[operator]
+        l_kl = self._kl_loss(mu, log_sigma)  # type: ignore[misc]
+        # Linear warmup: beta rises from 0 to beta_kl over kl_warmup_steps training steps so that
+        # SupCon / reconstruction can establish a signal before the prior constraint kicks in.
+        effective_beta = (
+            self._beta_kl * min(1.0, self.global_step / self._kl_warmup_steps)
+            if self._kl_warmup_steps > 0
+            else self._beta_kl
+        )
+        self.log(f"{stage}_loss-kl", l_kl, batch_size=batch_size)
+        self.log(f"{stage}_beta-kl", effective_beta, batch_size=batch_size)
+        return effective_beta * l_kl
 
     def _unpack_batch(self, batch: DCBAHeteroData) -> Tensor:
         """Reshape and return the config tensor; used as encoder input and regression target."""

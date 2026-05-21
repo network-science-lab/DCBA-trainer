@@ -53,7 +53,8 @@ training:
         bidirectional: true
     kl:
       name: kl_divergence
-      beta: 0.01
+      beta: 1.0
+      warmup_epochs: 3
   optimizer:
     name: AdamW
     args:

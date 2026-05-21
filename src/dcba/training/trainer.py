@@ -157,12 +157,18 @@ def train(config: dict) -> None:
     )
 
     if wrapper_name == "config_autoencoder":
+        losses_cfg = training_cfg["losses"]
         encoder = _build_model(next(iter(config["models"].values())))
-        loss_fn = _build_loss(next(iter(training_cfg["losses"].values())))
+        loss_fn = _build_loss(next(iter(losses_cfg.values())))
+        kl_cfg = losses_cfg.get("kl")
+        kl_loss = _build_loss(kl_cfg) if kl_cfg is not None else None
         wrapper: pl.LightningModule = DCBAAutoencoderWrapper(
             encoder,
             training_cfg["optimizer"]["args"],
             loss_fn=loss_fn,
+            kl_loss=kl_loss,
+            beta_kl=kl_cfg.get("beta", 1.0) if kl_cfg is not None else 1.0,
+            kl_warmup_epochs=kl_cfg.get("warmup_epochs", 0) if kl_cfg is not None else 0,
         )
     elif wrapper_name == "supcon":
         losses_cfg = training_cfg["losses"]
@@ -180,7 +186,8 @@ def train(config: dict) -> None:
             supcon_loss=supcon_loss,
             lambda_supcon=losses_cfg["repr"].get("weight", 1.0),
             kl_loss=kl_loss,
-            beta_kl=kl_cfg.get("beta", 0.01) if kl_cfg is not None else 0.01,
+            beta_kl=kl_cfg.get("beta", 1.0) if kl_cfg is not None else 1.0,
+            kl_warmup_epochs=kl_cfg.get("warmup_epochs", 0) if kl_cfg is not None else 0,
         )
     else:
         raise ValueError(f"Unknown wrapper '{wrapper_name}'. Available: {list(_WRAPPERS)}")

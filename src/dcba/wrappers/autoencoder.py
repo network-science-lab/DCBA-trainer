@@ -32,6 +32,11 @@ class DCBAAutoencoderWrapper(DCBABaseWrapper):
         to human-readable values before logging.  When ``None``, raw normalised values
         are logged with column names suffixed ``_norm``.
     :param loss_fn: Loss module used to compute the reconstruction error.
+    :param kl_loss: Optional KL divergence loss; only meaningful when ``encoder`` is a
+        :class:`~dcba.models.config_vae.ConfigVAE`.
+    :param beta_kl: Target weight for the KL term at steady state.
+    :param kl_warmup_epochs: Epochs over which ``beta_kl`` is linearly annealed from 0 to its
+        target value.  Set to 0 to use a constant ``beta_kl`` from step 0.
     """
 
     def __init__(
@@ -40,14 +45,20 @@ class DCBAAutoencoderWrapper(DCBABaseWrapper):
         optimizer_config: dict,
         scaler: ABCDConfigScaler | None = None,
         loss_fn: nn.Module | None = None,
+        kl_loss: nn.Module | None = None,
+        beta_kl: float = 1.0,
+        kl_warmup_epochs: int = 0,
     ) -> None:
-        """Initialise the wrapper with the encoder, optimiser settings, and optional loss."""
+        """Initialise the wrapper with the encoder, optimiser settings, and optional losses."""
         super().__init__()
-        self.save_hyperparameters(ignore=["encoder", "loss_fn"])
+        self.save_hyperparameters(ignore=["encoder", "loss_fn", "kl_loss"])
         self._encoder = encoder
         self._optimizer_config = optimizer_config
         self._scaler = scaler
         self._loss_fn = loss_fn if loss_fn is not None else nn.MSELoss()
+        self._kl_loss = kl_loss
+        self._beta_kl = beta_kl
+        self._kl_warmup_epochs = kl_warmup_epochs
         self._test_rows: list[tuple[list[float], list[float]]] = []
 
     def forward(self, batch: DCBAHeteroData) -> ForwardOutput:
@@ -64,6 +75,8 @@ class DCBAAutoencoderWrapper(DCBABaseWrapper):
         config = self._unpack_batch(batch)
         out = self._encoder(batch)
         loss = self._loss_fn(out.reconstruction, config)
+        if self._kl_loss is not None:
+            loss = loss + self._kl_term(self._encoder, config, batch.batch_size, stage)
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch.batch_size)
         return (loss,)
 
