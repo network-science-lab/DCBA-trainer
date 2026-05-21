@@ -1,0 +1,61 @@
+program: src/dcba/entrypoint.py
+command:
+  - uv
+  - run
+  - python
+  - ${program}
+  - --config-name
+  - gps-supcon
+  - ${args_no_hyphens}
+project: dcba
+
+method: bayes
+
+metric:
+  name: val_loss
+  goal: minimize
+
+parameters:
+  # GPS architecture — hidden_dim=64, num_layers=2 is the memory ceiling at batch_size=64
+  models.graph.hidden_dim:
+    values: [32, 64]
+
+  models.graph.num_layers:
+    values: [1, 2]
+
+  models.graph.num_heads:
+    values: [2, 4]
+
+  models.graph.dropout:
+    values: [0.0, 0.1, 0.2]
+
+  models.graph.attn_dropout:
+    values: [0.0, 0.1]
+
+  # models.theta.embedding_dim is auto-synced via OmegaConf interpolation in gps-supcon.yaml
+  models.graph.embedding_dim:
+    values: [32, 64]
+
+  # SupCon loss
+  training.losses.repr.args.temperature:
+    values: [0.03, 0.07, 0.1, 0.2]
+
+  training.losses.repr.args.tau_dist:
+    values: [0.5, 1.0, 2.0, 5.0]
+
+  training.losses.repr.weight:
+    values: [0.1, 0.3, 0.5, 1.0]
+
+  training.losses.reg.args.lambda_penalty:
+    values: [0.5, 1.0, 2.0]
+
+  # Optimizer — smaller range than pure-regression models; GPS is bigger and more sensitive
+  training.optimizer.args.lr:
+    distribution: log_uniform_values
+    min: 0.00001
+    max: 0.001
+
+  training.optimizer.args.weight_decay:
+    distribution: log_uniform_values
+    min: 0.000001
+    max: 0.01

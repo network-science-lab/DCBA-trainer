@@ -14,7 +14,7 @@ data:
       n_max: 10000 # upper bound for all node-count-dependent scaler features
   val_ratio: 0.10
   test_ratio: 0.10
-  batch_size: 4
+  batch_size: 64
   num_workers: 0
 
 models:

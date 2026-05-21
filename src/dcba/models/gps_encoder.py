@@ -50,6 +50,10 @@ class GPSEncoder(nn.Module):
         attn_type: str = "multihead",
     ) -> None:
         """Build GPS layers, pooling, and decoder from the supplied parameters."""
+        if hidden_dim % num_heads != 0:
+            raise ValueError(
+                f"hidden_dim ({hidden_dim}) must be divisible by num_heads ({num_heads})"
+            )
         super().__init__()
 
         self._input_proj = nn.Linear(input_dim, hidden_dim)
