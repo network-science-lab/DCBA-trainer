@@ -5,8 +5,7 @@ hydra:
 random_seed: 42
 
 data:
-  dataset_root: "abcd-interim"
-  # dataset_root: "test/dataset_abcd"
+  dataset_root: "abcd-big"
   transform: ABCDConfigToTensor
   scaler:
     name: ABCDConfigScaler
@@ -19,23 +18,24 @@ data:
 
 models:
   theta:
-    cls: ConfigAutoEncoder
+    cls: ConfigVAE
     input_dim: 9
-    hidden_dims: [64]
+    hidden_dims: [64, 32]
     embedding_dim: 32
 
 training:
   wrapper: config_autoencoder
   accelerator: gpu
-  devices: [0] # must be a list of GPU indices, e.g. [0] or [1]; integer form is not supported
+  devices: [2] # must be a list of GPU indices, e.g. [0] or [1]; integer form is not supported
   max_epochs: 200
   losses:
     reg:
       name: abcd_constraint
       args:
         lambda_penalty: 1.0
-      # name: mse
-      # args: {}
+    kl:
+      name: kl_divergence
+      beta: 0.01
   optimizer:
     name: AdamW
     args:
@@ -43,8 +43,8 @@ training:
       weight_decay: 0.00001
   logger:
     project: dcba
-    name: ae-ff
-    tags: [ae, abcd-constraint, funnel-mlp, batch64]
+    name: vae-ff
+    tags: [vae, abcd-constraint, funnel-mlp, batch64]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss
