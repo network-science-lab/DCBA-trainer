@@ -6,6 +6,7 @@ random_seed: 42
 
 data:
   dataset_root: "abcd-interim"
+  # dataset_root: "test/dataset_abcd"
   transform: ABCDConfigToTensor
   scaler:
     name: ABCDConfigScaler
@@ -13,15 +14,15 @@ data:
       n_max: 10000 # upper bound for all node-count-dependent scaler features
   val_ratio: 0.10
   test_ratio: 0.10
-  batch_size: 4
+  batch_size: 64
   num_workers: 0
 
 models:
-  graph:
-    cls: GINEncoder
-    hidden_dims: [64, 128]
+  theta:
+    cls: ConfigAutoEncoder
+    input_dim: 9
+    hidden_dims: [64]
     embedding_dim: 32
-    output_dim: 9
 
 training:
   wrapper: config_autoencoder
@@ -42,8 +43,8 @@ training:
       weight_decay: 0.00001
   logger:
     project: dcba
-    name: ff-autoencoder
-    tags: [gnn, abcd-constraint, expand-compress-gnn]
+    name: ae-ff
+    tags: [mlp, abcd-constraint, funnel-mlp, bs4]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss
@@ -55,7 +56,5 @@ training:
       monitor: val_loss
       mode: min
       patience: 20
-    - name: gradient_accumulation_scheduler
-      gradient_scheduling: 4
     - name: model_summary
       max_depth: -1

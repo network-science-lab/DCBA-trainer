@@ -5,7 +5,7 @@ command:
   - python
   - ${program}
   - --config-name
-  - gnn-encoder
+  - gin-ff
   - ${args_no_hyphens}
 project: dcba
 

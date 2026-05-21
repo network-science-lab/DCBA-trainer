@@ -180,7 +180,7 @@ def train(config: dict) -> None:
             supcon_loss=supcon_loss,
             lambda_supcon=losses_cfg["repr"].get("weight", 1.0),
             kl_loss=kl_loss,
-            beta_kl=kl_cfg.get("weight", 0.01) if kl_cfg is not None else 0.01,
+            beta_kl=kl_cfg.get("beta", 0.01) if kl_cfg is not None else 0.01,
         )
     else:
         raise ValueError(f"Unknown wrapper '{wrapper_name}'. Available: {list(_WRAPPERS)}")

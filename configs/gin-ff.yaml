@@ -5,55 +5,36 @@ hydra:
 random_seed: 42
 
 data:
-  dataset_root: "abcd-big"
+  dataset_root: "abcd-interim"
   transform: ABCDConfigToTensor
   scaler:
     name: ABCDConfigScaler
     args:
-      n_max: 10000
+      n_max: 10000 # upper bound for all node-count-dependent scaler features
   val_ratio: 0.10
   test_ratio: 0.10
-  batch_size: 64
+  batch_size: 4
   num_workers: 0
 
 models:
   graph:
-    cls: GPSEncoder
-    attn_type: performer
-    input_dim: 1
-    hidden_dim: 64
-    num_layers: 2
-    num_heads: 4
+    cls: GINEncoder
+    hidden_dims: [64, 128]
     embedding_dim: 32
     output_dim: 9
-    dropout: 0.1
-    attn_dropout: 0.1
-  theta:
-    cls: ConfigVAE
-    input_dim: 9
-    hidden_dims: [64, 32]
-    embedding_dim: ${models.graph.embedding_dim}
 
 training:
-  wrapper: supcon
+  wrapper: config_autoencoder
   accelerator: gpu
-  devices: [0]
+  devices: [0] # must be a list of GPU indices, e.g. [0] or [1]; integer form is not supported
   max_epochs: 200
   losses:
     reg:
       name: abcd_constraint
       args:
         lambda_penalty: 1.0
-    repr:
-      name: supcon
-      weight: 0.3
-      args:
-        temperature: 0.07
-        tau_dist: 1.0
-        bidirectional: true
-    kl:
-      name: kl_divergence
-      beta: 0.01
+      # name: mse
+      # args: {}
   optimizer:
     name: AdamW
     args:
@@ -61,8 +42,8 @@ training:
       weight_decay: 0.00001
   logger:
     project: dcba
-    name: gps-vae-supcon
-    tags: [gps, vae, community-features, abcd-constraint, bidirectional, batch64]
+    name: gin-ff
+    tags: [gnn, abcd-constraint, expand-compress-gnn]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss
@@ -73,6 +54,8 @@ training:
     - name: early_stopping
       monitor: val_loss
       mode: min
-      patience: 5
+      patience: 20
+    - name: gradient_accumulation_scheduler
+      gradient_scheduling: 4
     - name: model_summary
       max_depth: -1
