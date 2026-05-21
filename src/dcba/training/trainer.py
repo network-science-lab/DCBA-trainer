@@ -9,12 +9,14 @@ from torch_geometric.transforms import BaseTransform
 from dcba.datamodule import ABCDDataModule
 from dcba.dataset import ABCDConfigScaler, ABCDConfigSchema, ABCDConfigToTensor
 from dcba.models.config_autoencoder import ConfigAutoEncoder
+from dcba.models.config_vae import ConfigVAE
 from dcba.models.gin_encoder import GINEncoder
 from dcba.models.gps_encoder import GPSEncoder
 from dcba.training.callbacks import get_callbacks
 from dcba.training.loggers import get_logger
 from dcba.training.loss import (
     ABCDConstraintPenaltyLoss,
+    KLDivergenceLoss,
     MultiPositiveSupConLoss,
 )
 from dcba.wrappers import DCBAAutoencoderWrapper, DCBASupConWrapper
@@ -26,6 +28,7 @@ _WRAPPERS = {
 
 _MODELS = {
     "ConfigAutoEncoder": ConfigAutoEncoder,
+    "ConfigVAE": ConfigVAE,
     "GINEncoder": GINEncoder,
     "GPSEncoder": GPSEncoder,
 }
@@ -33,6 +36,7 @@ _MODELS = {
 _LOSSES: dict[str, type[nn.Module]] = {
     "mse": nn.MSELoss,
     "abcd_constraint": ABCDConstraintPenaltyLoss,
+    "kl_divergence": KLDivergenceLoss,
     "supcon": MultiPositiveSupConLoss,
 }
 
@@ -166,6 +170,8 @@ def train(config: dict) -> None:
         supcon_loss = _build_loss(losses_cfg["repr"])
         graph_encoder = _build_model(config["models"]["graph"])
         config_encoder = _build_model(config["models"]["theta"])
+        kl_cfg = losses_cfg.get("kl")
+        kl_loss = _build_loss(kl_cfg) if kl_cfg is not None else None
         wrapper = DCBASupConWrapper(
             graph_encoder=graph_encoder,
             config_encoder=config_encoder,
@@ -173,6 +179,8 @@ def train(config: dict) -> None:
             reg_loss=reg_loss,
             supcon_loss=supcon_loss,
             lambda_supcon=losses_cfg["repr"].get("weight", 1.0),
+            kl_loss=kl_loss,
+            beta_kl=kl_cfg.get("weight", 0.01) if kl_cfg is not None else 0.01,
         )
     else:
         raise ValueError(f"Unknown wrapper '{wrapper_name}'. Available: {list(_WRAPPERS)}")

@@ -10,7 +10,7 @@ data:
   scaler:
     name: ABCDConfigScaler
     args:
-      n_max: 10000 # upper bound for all node-count-dependent scaler features
+      n_max: 10000
   val_ratio: 0.10
   test_ratio: 0.10
   batch_size: 64
@@ -18,28 +18,32 @@ data:
 
 models:
   graph:
-    cls: GINEncoder
-    hidden_dims: [64, 128]
+    cls: GPSEncoder
+    attn_type: performer
+    input_dim: 1
+    hidden_dim: 64
+    num_layers: 2
+    num_heads: 4
     embedding_dim: 32
     output_dim: 9
+    dropout: 0.1
+    attn_dropout: 0.1
   theta:
-    cls: ConfigAutoEncoder
+    cls: ConfigVAE
     input_dim: 9
-    hidden_dims: [16]
+    hidden_dims: [64, 32]
     embedding_dim: ${models.graph.embedding_dim}
 
 training:
   wrapper: supcon
   accelerator: gpu
-  devices: [0] # must be a list of GPU indices, e.g. [0] or [1]; integer form is not supported
+  devices: [0]
   max_epochs: 200
   losses:
     reg:
       name: abcd_constraint
       args:
         lambda_penalty: 1.0
-      # name: mse
-      # args: {}
     repr:
       name: supcon
       weight: 0.3
@@ -47,6 +51,9 @@ training:
         temperature: 0.07
         tau_dist: 1.0
         bidirectional: true
+    kl:
+      name: kl_divergence
+      weight: 0.01
   optimizer:
     name: AdamW
     args:
@@ -54,8 +61,8 @@ training:
       weight_decay: 0.00001
   logger:
     project: dcba
-    name: mm-supcon
-    tags: [big-dataset, fixed-supcon, tiny-mlp]
+    name: mm-gps-vae-supcon
+    tags: [gps, vae, community-features, abcd-constraint, bidirectional, batch64]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss

@@ -53,11 +53,13 @@ class DCBASupConWrapper(DCBABaseWrapper):
         supcon_loss: nn.Module,
         lambda_supcon: float = 1.0,
         scaler: ABCDConfigScaler | None = None,
+        kl_loss: nn.Module | None = None,
+        beta_kl: float = 0.01,
     ) -> None:
         """Initialise with both encoders, optimiser settings, and loss hyperparameters."""
         super().__init__()
         self.save_hyperparameters(
-            ignore=["graph_encoder", "config_encoder", "reg_loss", "supcon_loss"]
+            ignore=["graph_encoder", "config_encoder", "reg_loss", "supcon_loss", "kl_loss"]
         )
         self._graph_encoder = graph_encoder
         self._config_encoder = config_encoder
@@ -65,6 +67,8 @@ class DCBASupConWrapper(DCBABaseWrapper):
         self._lambda_supcon = lambda_supcon
         self._reg_loss = reg_loss
         self._supcon_loss = supcon_loss
+        self._kl_loss = kl_loss
+        self._beta_kl = beta_kl
         self._scaler = scaler
         self._test_rows: list[tuple[str, int, list[float], list[float], list[float]]] = []
 
@@ -107,6 +111,13 @@ class DCBASupConWrapper(DCBABaseWrapper):
         loss = l_reg_zg + l_reg_zt + self._lambda_supcon * l_supcon
 
         batch_size = cast(int, batch.batch_size)
+
+        if self._kl_loss is not None:
+            mu, log_sigma = self._config_encoder.encode_distribution(config)
+            l_kl = self._kl_loss(mu, log_sigma)
+            loss = loss + self._beta_kl * l_kl
+            self.log(f"{stage}_loss-kl", l_kl, batch_size=batch_size)
+
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch_size)
         self.log(f"{stage}_loss-reg-t", l_reg_zt, batch_size=batch_size)
         self.log(f"{stage}_loss-reg-g", l_reg_zg, batch_size=batch_size)
