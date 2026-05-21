@@ -24,7 +24,7 @@ class DCBAAutoencoderWrapper(DCBABaseWrapper):
     per-sample reconstruction rows and logs them as a wandb Table.
 
     :param encoder: The :class: `nn.Module` to train. In practice it will be
-        `~dcba.models.config_autoencoder.ConfigAutoEncoder` or
+        `~dcba.models.config_ae.ConfigAutoEncoder` or
         `~dcba.models.gin_encoder.GINEncoder`
     :param optimizer_config: AdamW hyperparameters dict, expected keys ``lr`` and
         ``weight_decay``.

@@ -8,7 +8,7 @@ from torch_geometric.transforms import BaseTransform
 
 from dcba.datamodule import ABCDDataModule
 from dcba.dataset import ABCDConfigScaler, ABCDConfigSchema, ABCDConfigToTensor
-from dcba.models.config_autoencoder import ConfigAutoEncoder
+from dcba.models.config_ae import ConfigAutoEncoder
 from dcba.models.config_vae import ConfigVAE
 from dcba.models.gin_encoder import GINEncoder
 from dcba.models.gps_encoder import GPSEncoder

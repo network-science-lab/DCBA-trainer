@@ -31,12 +31,14 @@ class DCBASupConWrapper(DCBABaseWrapper):
       and ``z_theta`` providing cross-modal positives and negatives.
 
     Both encoders are trained jointly.
-    Logs ``{stage}_loss``, ``{stage}_l_reg``, and ``{stage}_l_supcon`` at every step.
+    Logs ``{stage}_loss``, ``{stage}_loss-reg-t``, ``{stage}_loss-reg-g``, and
+    ``{stage}_loss-contr`` at every step; ``{stage}_loss-kl`` when ``kl_loss`` is set.
 
     :param graph_encoder: GNN that produces ``(z_g, theta_hat)`` -- in practice
         :class:`~dcba.models.gin_encoder.GINEncoder`.
-    :param config_encoder: MLP autoencoder that produces ``(z_theta, theta_hat)`` -- in practice
-        :class:`~dcba.models.config_autoencoder.ConfigAutoEncoder`.
+    :param config_encoder: MLP encoder that produces ``(z_theta, theta_hat)`` -- either
+        :class:`~dcba.models.config_ae.ConfigAutoEncoder` (plain AE baseline) or
+        :class:`~dcba.models.config_vae.ConfigVAE` (VAE with KL regularisation).
     :param optimizer_config: AdamW hyperparameters dict, expected keys ``lr`` and ``weight_decay``.
     :param reg_loss: Loss module applied to ``(theta_hat, theta)`` for the regression term.
     :param supcon_loss: Pre-built :class:`~dcba.training.loss.MultiPositiveSupConLoss` instance.
