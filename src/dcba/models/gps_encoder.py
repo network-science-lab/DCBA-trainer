@@ -17,15 +17,15 @@ class GPSEncoder(nn.Module):
     needed to recover entangled ABCD parameters (e.g. degree-distribution exponents and
     community-mixing parameter ``xi``).
 
-    Each heterogeneous relation is processed independently through all GPS layers, and the
-    resulting per-relation embeddings are aggregated with a trainable attention-weighted sum
-    (``LayerwiseAggregation``).  Input dimensionality is set via ``input_dim`` and works
-    with both ABCD (L=1, node features ``[N, L]``) and mABCD (L>1).
+    Each heterogeneous relation ``i`` is processed independently through all GPS layers, seeded
+    from ``data["actor"].x[:, i:i+1]`` so that node features are semantically paired with the
+    edges from the same community layer.  The resulting per-relation embeddings are aggregated
+    with a trainable attention-weighted sum (``LayerwiseAggregation``).  Supports both
+    ABCD (L=1, one relation) and mABCD (L>1, one relation per community layer).
 
     Expects ``data["actor"].x`` (node features from
     :class:`~dcba.dataset.transforms.CommunityToSize`) to be pre-computed before batching.
 
-    :param input_dim: Node feature dimensionality.
     :param hidden_dim: Channel width used throughout all GPS layers.
     :param num_layers: Number of GPS layers.
     :param num_heads: Number of multi-head attention heads in each GPS layer.
@@ -39,7 +39,6 @@ class GPSEncoder(nn.Module):
 
     def __init__(
         self,
-        input_dim: int,
         hidden_dim: int,
         num_layers: int,
         num_heads: int,
@@ -56,7 +55,7 @@ class GPSEncoder(nn.Module):
             )
         super().__init__()
 
-        self._input_proj = nn.Linear(input_dim, hidden_dim)
+        self._input_proj = nn.Linear(1, hidden_dim)
 
         self._gps_layers = nn.ModuleList(
             [
@@ -73,7 +72,7 @@ class GPSEncoder(nn.Module):
                     heads=num_heads,
                     dropout=dropout,
                     attn_type=attn_type,
-                    norm="batch_norm",
+                    norm="layer_norm",
                     attn_kwargs={"dropout": attn_dropout},
                 )
                 for _ in range(num_layers)
@@ -101,12 +100,11 @@ class GPSEncoder(nn.Module):
 
         :returns: Embedding tensor of shape ``(batch, embedding_dim)``.
         """
-        x = self._input_proj(data["actor"].x)
         batch_idx = data["actor"].batch
 
         y_relations = {}
-        for relation, edge_index in data.edge_index_dict.items():
-            h = x
+        for i, (relation, edge_index) in enumerate(data.edge_index_dict.items()):
+            h = self._input_proj(data["actor"].x[:, i : i + 1])
             for layer in self._gps_layers:
                 h = layer(h, edge_index, batch=batch_idx)
             y_relations[relation] = h

@@ -18,7 +18,6 @@ class GINEncoder(nn.Module):
     for contrastive learning when paired with
     :class:`~dcba.models.config_autoencoder.ConfigAutoEncoder`.
 
-    :param input_dim: Node feature dimensionality.
     :param hidden_dims: Sizes of intermediate GIN layers.
     :param embedding_dim: Dimensionality of the graph embedding ``z_g``.
     :param output_dim: Dimensionality of the predicted config vector (e.g. 9 for ABCD).
@@ -27,7 +26,6 @@ class GINEncoder(nn.Module):
 
     def __init__(
         self,
-        input_dim: int,
         hidden_dims: list[int],
         embedding_dim: int,
         output_dim: int,
@@ -36,7 +34,7 @@ class GINEncoder(nn.Module):
         """Build encoder and decoder MLPs from the supplied architecture parameters."""
         super().__init__()
 
-        self.input_proj = nn.Linear(input_dim, hidden_dims[0])
+        self.input_proj = nn.Linear(1, hidden_dims[0])
 
         enc_dims = hidden_dims + [embedding_dim]
         layers = []
@@ -49,7 +47,7 @@ class GINEncoder(nn.Module):
             layers.append((GINConv(nn=mlp, train_eps=True), "x, edge_index -> x"))
             if i < len(enc_dims) - 2:
                 layers.append(nn.ReLU())
-                layers.append(nn.BatchNorm1d(enc_dims[i + 1]))
+                layers.append(nn.LayerNorm(enc_dims[i + 1]))
 
         self._encoder = Sequential("x, edge_index", layers)
         self._dropout = nn.Dropout(dropout)
@@ -72,11 +70,9 @@ class GINEncoder(nn.Module):
 
         :returns: Embedding tensor of shape ``(batch, embedding_dim)``.
         """
-        x = self.input_proj(data["actor"].x)
-
         y_relations = {}
-        for relation, edge_index in data.edge_index_dict.items():
-            h = self._encoder(x, edge_index)
+        for i, (relation, edge_index) in enumerate(data.edge_index_dict.items()):
+            h = self._encoder(self.input_proj(data["actor"].x[:, i : i + 1]), edge_index)
             y_relations[relation] = self._dropout(h)
 
         agg = self._aggregator(y_relations)
