@@ -20,7 +20,6 @@ models:
   graph:
     cls: GPSEncoder
     attn_type: performer
-    input_dim: 1
     hidden_dim: 64
     num_layers: 2
     num_heads: 4

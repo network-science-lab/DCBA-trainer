@@ -159,9 +159,11 @@ def train(config: dict) -> None:
     if wrapper_name == "config_autoencoder":
         losses_cfg = training_cfg["losses"]
         encoder = _build_model(next(iter(config["models"].values())))
-        loss_fn = _build_loss(next(iter(losses_cfg.values())))
+        loss_fn = _build_loss(losses_cfg["reg"])
         kl_cfg = losses_cfg.get("kl")
         kl_loss = _build_loss(kl_cfg) if kl_cfg is not None else None
+        if kl_loss is not None and not isinstance(encoder, ConfigVAE):
+            raise TypeError(f"kl_loss requires a ConfigVAE encoder, got {type(encoder).__name__}.")
         wrapper: pl.LightningModule = DCBAAutoencoderWrapper(
             encoder,
             training_cfg["optimizer"]["args"],
@@ -178,6 +180,10 @@ def train(config: dict) -> None:
         config_encoder = _build_model(config["models"]["theta"])
         kl_cfg = losses_cfg.get("kl")
         kl_loss = _build_loss(kl_cfg) if kl_cfg is not None else None
+        if kl_loss is not None and not isinstance(config_encoder, ConfigVAE):
+            raise TypeError(
+                f"kl_loss requires a ConfigVAE config encoder, got {type(config_encoder).__name__}."
+            )
         wrapper = DCBASupConWrapper(
             graph_encoder=graph_encoder,
             config_encoder=config_encoder,

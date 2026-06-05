@@ -6,7 +6,6 @@ random_seed: 42
 
 data:
   dataset_root: "abcd-interim"
-  # dataset_root: "test/dataset_abcd"
   transform: ABCDConfigToTensor
   scaler:
     name: ABCDConfigScaler

@@ -72,7 +72,7 @@ class DCBAAutoencoderWrapper(KLRegularisedMixin, DCBABaseWrapper):
         """
         return self._encoder(batch)
 
-    def _step(self, batch: DCBAHeteroData, stage: str) -> tuple[Tensor]:
+    def _step(self, batch: DCBAHeteroData, stage: str) -> tuple[Tensor, Tensor]:
         config = self._unpack_batch(batch)
         batch_size = cast(int, batch.batch_size)
         out = self._encoder(batch)
@@ -81,7 +81,7 @@ class DCBAAutoencoderWrapper(KLRegularisedMixin, DCBABaseWrapper):
             mu, log_sigma = self._encoder.encode_distribution(config)  # type: ignore[operator]
             loss = loss + self._kl_term(mu, log_sigma, batch_size, stage)
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch_size)
-        return (loss,)
+        return loss, out.reconstruction
 
     def test_step(
         self,
@@ -90,13 +90,10 @@ class DCBAAutoencoderWrapper(KLRegularisedMixin, DCBABaseWrapper):
     ) -> None:
         """Compute and log test loss; accumulate per-sample reconstruction rows."""
         config = self._unpack_batch(batch)
-        batch_size = cast(int, batch.batch_size)
-        out = self._encoder(batch)
-        loss = self._loss_fn(out.reconstruction, config)
-        self.log("test_loss", loss, prog_bar=True, batch_size=batch_size)
+        _, reconstruction = self._step(batch, "test")
 
         config_cpu = config.detach().cpu()
-        recon_cpu = out.reconstruction.detach().cpu()
+        recon_cpu = reconstruction.detach().cpu()
 
         if self._scaler is not None:
             config_cpu = self._scaler.inverse_transform(config_cpu)
@@ -108,9 +105,9 @@ class DCBAAutoencoderWrapper(KLRegularisedMixin, DCBABaseWrapper):
     def on_test_epoch_end(self) -> None:
         """Log original and reconstructed configs as a single wandb Table.
 
-        Each sample occupies two consecutive rows distinguished by a ``sample`` label
-        of the form ``{i}-o`` (original) and ``{i}-r`` (reconstructed), so wandb's
-        table controls can filter and compare them side by side.
+        Each sample occupies two consecutive rows: ``{i}-orig`` (original θ) and
+        ``{i}-regr`` (reconstruction), so wandb's table controls can filter and
+        compare them side by side.
         """
         if not isinstance(self.logger, WandbLogger):
             return
@@ -121,7 +118,7 @@ class DCBAAutoencoderWrapper(KLRegularisedMixin, DCBABaseWrapper):
         columns = ["sample"] + [f"{k}{suffix}" for k in ABCD_CONFIG_KEYS]
         rows = []
         for i, (orig, recon) in enumerate(self._test_rows):
-            rows.append([f"{i}-o"] + orig)
-            rows.append([f"{i}-r"] + recon)
+            rows.append([f"{i}-orig"] + orig)
+            rows.append([f"{i}-regr"] + recon)
         table = wandb.Table(columns=columns, data=rows)
         self.logger.experiment.log({"test/reconstructions": table})
