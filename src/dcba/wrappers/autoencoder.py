@@ -12,10 +12,10 @@ from torch import Tensor
 from dcba.dataset import ABCDConfigScaler
 from dcba.dataset.transforms import ABCD_CONFIG_KEYS
 from dcba.models.types import ForwardOutput
-from dcba.wrappers.base import DCBABaseWrapper
+from dcba.wrappers.base import DCBABaseWrapper, KLRegularisedMixin
 
 
-class DCBAAutoencoderWrapper(DCBABaseWrapper):
+class DCBAAutoencoderWrapper(KLRegularisedMixin, DCBABaseWrapper):
     """
     LightningModule for Phase 1: trains the config autoencoder in isolation.
 
@@ -59,6 +59,7 @@ class DCBAAutoencoderWrapper(DCBABaseWrapper):
         self._kl_loss = kl_loss
         self._beta_kl = beta_kl
         self._kl_warmup_epochs = kl_warmup_epochs
+        self._kl_warmup_steps = 0
         self._test_rows: list[tuple[list[float], list[float]]] = []
 
     def forward(self, batch: DCBAHeteroData) -> ForwardOutput:
@@ -73,11 +74,13 @@ class DCBAAutoencoderWrapper(DCBABaseWrapper):
 
     def _step(self, batch: DCBAHeteroData, stage: str) -> tuple[Tensor]:
         config = self._unpack_batch(batch)
+        batch_size = cast(int, batch.batch_size)
         out = self._encoder(batch)
         loss = self._loss_fn(out.reconstruction, config)
         if self._kl_loss is not None:
-            loss = loss + self._kl_term(self._encoder, config, batch.batch_size, stage)
-        self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch.batch_size)
+            mu, log_sigma = self._encoder.encode_distribution(config)  # type: ignore[operator]
+            loss = loss + self._kl_term(mu, log_sigma, batch_size, stage)
+        self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch_size)
         return (loss,)
 
     def test_step(
@@ -87,9 +90,10 @@ class DCBAAutoencoderWrapper(DCBABaseWrapper):
     ) -> None:
         """Compute and log test loss; accumulate per-sample reconstruction rows."""
         config = self._unpack_batch(batch)
+        batch_size = cast(int, batch.batch_size)
         out = self._encoder(batch)
         loss = self._loss_fn(out.reconstruction, config)
-        self.log("test_loss", loss, prog_bar=True, batch_size=batch.batch_size)
+        self.log("test_loss", loss, prog_bar=True, batch_size=batch_size)
 
         config_cpu = config.detach().cpu()
         recon_cpu = out.reconstruction.detach().cpu()

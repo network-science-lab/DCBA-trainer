@@ -9,45 +9,40 @@ from torch import Tensor
 from dcba.dataset import ABCDConfigScaler
 
 
-class DCBABaseWrapper(pl.LightningModule):
+class KLRegularisedMixin:
     """
-    Abstract base for DCBA LightningModule wrappers.
+    Mixin that adds beta-annealed KL regularisation for ConfigVAE-based config encoders.
 
-    Provides shared boilerplate: batch unpacking, train/val step dispatch,
-    scaler management, test-row reset, AdamW optimiser construction, and optional
-    KL divergence regularisation for :class:`~dcba.models.config_vae.ConfigVAE` encoders.
-    Subclasses must implement :meth:`_step`.
+    Designed for :class:`~dcba.models.config_vae.ConfigVAE`-based config encoders.
+
+    Concrete subclasses must declare and initialise ``_kl_loss``, ``_beta_kl``,
+    ``_kl_warmup_epochs``, and ``_kl_warmup_steps`` in their own ``__init__``.
+    They also inherit ``self.trainer``, ``self.global_step``, and ``self.log``
+    from :class:`~lightning.pytorch.LightningModule` via the main base class.
     """
 
-    def __init__(self) -> None:
-        """Initialise shared instance attributes to their defaults."""
-        super().__init__()
-        self._optimizer_config: dict = {}
-        self._scaler: ABCDConfigScaler | None = None
-        self._test_rows: list = []
-        # KL attributes -- set by subclasses that use a ConfigVAE config encoder.
-        self._kl_loss: nn.Module | None = None
-        self._beta_kl: float = 1.0
-        self._kl_warmup_epochs: int = 0
-        self._kl_warmup_steps: int = 0  # resolved in on_train_start
+    _kl_loss: nn.Module | None
+    _beta_kl: float
+    _kl_warmup_epochs: int
+    _kl_warmup_steps: int
 
     def on_train_start(self) -> None:
         """Convert KL warmup epochs to steps using the actual number of batches per epoch."""
         if self._kl_loss is not None and self._kl_warmup_epochs > 0:
             self._kl_warmup_steps = self._kl_warmup_epochs * self.trainer.num_training_batches
 
-    def _kl_term(self, encoder: nn.Module, config: Tensor, batch_size: int, stage: str) -> Tensor:
+    def _kl_term(self, mu: Tensor, log_sigma: Tensor, batch_size: int, stage: str) -> Tensor:
         """
         Compute the beta-annealed KL term and log raw KL and effective beta.
 
-        :param encoder: Config encoder; must expose ``encode_distribution`` (i.e. ConfigVAE).
-        :param config: Ground-truth config tensor of shape ``(batch, input_dim)``.
+        :param mu: Posterior mean of shape ``(batch, embedding_dim)``, from
+            :meth:`~dcba.models.config_vae.ConfigVAE.encode_distribution`.
+        :param log_sigma: Posterior log standard deviation, same shape as ``mu``.
         :param batch_size: Batch size for Lightning logging.
         :param stage: One of ``"train"``, ``"val"``, ``"test"``.
 
         :returns: Scalar ``effective_beta * KL``, ready to add to the total loss.
         """
-        mu, log_sigma = encoder.encode_distribution(config)  # type: ignore[operator]
         l_kl = self._kl_loss(mu, log_sigma)  # type: ignore[misc]
         # Linear warmup: beta rises from 0 to beta_kl over kl_warmup_steps training steps so that
         # SupCon / reconstruction can establish a signal before the prior constraint kicks in.
@@ -59,6 +54,23 @@ class DCBABaseWrapper(pl.LightningModule):
         self.log(f"{stage}_loss-kl", l_kl, batch_size=batch_size)
         self.log(f"{stage}_beta-kl", effective_beta, batch_size=batch_size)
         return effective_beta * l_kl
+
+
+class DCBABaseWrapper(pl.LightningModule):
+    """
+    Abstract base for DCBA LightningModule wrappers.
+
+    Provides shared boilerplate: batch unpacking, train/val step dispatch,
+    scaler management, test-row reset, and AdamW optimiser construction.
+    Subclasses must implement :meth:`_step`.
+    """
+
+    def __init__(self) -> None:
+        """Initialise shared instance attributes to their defaults."""
+        super().__init__()
+        self._optimizer_config: dict = {}
+        self._scaler: ABCDConfigScaler | None = None
+        self._test_rows: list = []
 
     def _unpack_batch(self, batch: DCBAHeteroData) -> Tensor:
         """Reshape and return the config tensor; used as encoder input and regression target."""

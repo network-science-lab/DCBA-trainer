@@ -14,10 +14,10 @@ from torch import Tensor
 
 from dcba.dataset import ABCDConfigScaler
 from dcba.dataset.transforms import ABCD_CONFIG_KEYS
-from dcba.wrappers.base import DCBABaseWrapper
+from dcba.wrappers.base import DCBABaseWrapper, KLRegularisedMixin
 
 
-class DCBASupConWrapper(DCBABaseWrapper):
+class DCBASupConWrapper(KLRegularisedMixin, DCBABaseWrapper):
     """
     LightningModule for joint training of graph and config encoders.
 
@@ -79,6 +79,7 @@ class DCBASupConWrapper(DCBABaseWrapper):
         self._kl_loss = kl_loss
         self._beta_kl = beta_kl
         self._kl_warmup_epochs = kl_warmup_epochs
+        self._kl_warmup_steps = 0
         self._scaler = scaler
         self._test_rows: list[tuple[str, int, list[float], list[float], list[float]]] = []
 
@@ -107,12 +108,20 @@ class DCBASupConWrapper(DCBABaseWrapper):
 
     def _step(self, batch: DCBAHeteroData, stage: str) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         config = self._unpack_batch(batch)
+        batch_size = cast(int, batch.batch_size)
 
-        # Encode graph and config into a shared embedding space; z_g is the anchor.
         z_g = F.normalize(self._graph_encoder.encode(batch), dim=-1)
-        z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
 
-        # Decode both embeddings back to config space for the regression terms.
+        # When KL is active, call encode_distribution once and sample manually so that
+        # (mu, log_sigma) are available for _kl_term without a second trunk forward pass.
+        if self._kl_loss is not None:
+            mu, log_sigma = self._config_encoder.encode_distribution(config)  # type: ignore[operator]
+            z_raw = (mu + torch.exp(log_sigma) * torch.randn_like(mu)) if self.training else mu
+            z_theta = F.normalize(z_raw, dim=-1)
+        else:
+            z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
+            mu = log_sigma = None
+
         theta_hat_zt = self._config_encoder.decode(z_theta)
         theta_hat_zg = self._config_encoder.decode(z_g)
 
@@ -123,13 +132,9 @@ class DCBASupConWrapper(DCBABaseWrapper):
         l_supcon = self._supcon_loss(z_g, z_theta, labels, config)
         loss = l_reg_zg + l_reg_zt + self._lambda_supcon * l_supcon
 
-        # Optional VAE regularisation — only active when config_encoder is a ConfigVAE.
-        if self._kl_loss is not None:
-            loss = loss + self._kl_term(
-                self._config_encoder, config, cast(int, batch.batch_size), stage
-            )
+        if mu is not None:
+            loss = loss + self._kl_term(mu, log_sigma, batch_size, stage)  # type: ignore[arg-type]
 
-        batch_size = cast(int, batch.batch_size)
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch_size)
         self.log(f"{stage}_loss-reg-t", l_reg_zt, batch_size=batch_size)
         self.log(f"{stage}_loss-reg-g", l_reg_zg, batch_size=batch_size)
