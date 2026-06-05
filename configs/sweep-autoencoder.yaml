@@ -5,7 +5,7 @@ command:
   - python
   - ${program}
   - --config-name
-  - config-autoencoder
+  - ae-ff
   - ${args_no_hyphens}
 project: dcba
 

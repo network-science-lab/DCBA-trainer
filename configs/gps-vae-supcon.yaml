@@ -28,7 +28,7 @@ models:
     dropout: 0.1
     attn_dropout: 0.1
   theta:
-    cls: ConfigAutoEncoder
+    cls: ConfigVAE
     input_dim: 9
     hidden_dims: [64, 32]
     embedding_dim: ${models.graph.embedding_dim}
@@ -50,6 +50,10 @@ training:
         temperature: 0.07
         tau_dist: 1.0
         bidirectional: true
+    kl:
+      name: kl_divergence
+      beta: 1.0
+      warmup_epochs: 3
   optimizer:
     name: AdamW
     args:
@@ -57,8 +61,8 @@ training:
       weight_decay: 0.00001
   logger:
     project: dcba
-    name: mm-gps-supcon
-    tags: [gps, community-features, abcd-constraint, bidirectional, batch64]
+    name: gps-vae-supcon
+    tags: [gps, vae, community-features, abcd-constraint, bidirectional, batch64]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss

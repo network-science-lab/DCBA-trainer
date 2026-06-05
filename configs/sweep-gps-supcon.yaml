@@ -5,7 +5,7 @@ command:
   - python
   - ${program}
   - --config-name
-  - gps-supcon
+  - gps-ae-supcon
   - ${args_no_hyphens}
 project: dcba
 

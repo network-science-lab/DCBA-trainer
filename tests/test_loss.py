@@ -5,8 +5,121 @@ import torch.nn.functional as F
 
 from dcba.training.loss import (
     ABCDConstraintPenaltyLoss,
+    KLDivergenceLoss,
     MultiPositiveSupConLoss,
 )
+from dcba.wrappers.base import KLRegularisedMixin
+
+
+class _KLMixinStub(KLRegularisedMixin):
+    """Minimal concrete stub that satisfies KLRegularisedMixin without a full LightningModule."""
+
+    def __init__(
+        self,
+        kl_loss: KLDivergenceLoss,
+        beta_kl: float,
+        kl_warmup_steps: int = 0,
+        global_step: int = 0,
+    ) -> None:
+        self._kl_loss = kl_loss
+        self._beta_kl = beta_kl
+        self._kl_warmup_epochs = 0
+        self._kl_warmup_steps = kl_warmup_steps
+        self.global_step = global_step
+        self._logs: dict = {}
+
+    def log(self, key: str, value: object, **_: object) -> None:  # type: ignore[override]
+        self._logs[key] = value
+
+
+class TestKLDivergenceLoss:
+    """Tests for :class:`~dcba.training.loss.KLDivergenceLoss`."""
+
+    def test_zero_at_prior(self) -> None:
+        """KL must be exactly 0 when the posterior matches the standard normal (μ=0, log_σ=0)."""
+        loss_fn = KLDivergenceLoss()
+        mu = torch.zeros(4, 8)
+        log_sigma = torch.zeros(4, 8)
+        assert loss_fn(mu, log_sigma).item() == 0.0
+
+    def test_analytic_value(self) -> None:
+        """KL(N(1,1) ‖ N(0,1)) = 0.5 per dimension; verify against closed form."""
+        loss_fn = KLDivergenceLoss()
+        # mu=1, log_sigma=0  →  sigma=1, sigma^2=1
+        # KL = 0.5*(sigma^2 + mu^2 - 1 - log(sigma^2)) = 0.5*(1+1-1-0) = 0.5
+        mu = torch.ones(1, 1)
+        log_sigma = torch.zeros(1, 1)
+        assert abs(loss_fn(mu, log_sigma).item() - 0.5) < 1e-6
+
+    def test_non_negative(self) -> None:
+        """KL divergence must be non-negative for any inputs."""
+        torch.manual_seed(0)
+        loss_fn = KLDivergenceLoss()
+        mu = torch.randn(16, 32)
+        log_sigma = torch.randn(16, 32)
+        assert loss_fn(mu, log_sigma).item() >= 0.0
+
+    def test_scalar_output(self) -> None:
+        """Output must be a zero-dimensional tensor."""
+        loss_fn = KLDivergenceLoss()
+        assert loss_fn(torch.randn(4, 8), torch.randn(4, 8)).ndim == 0
+
+    def test_backward_passes(self) -> None:
+        """Gradients must flow back to both mu and log_sigma."""
+        loss_fn = KLDivergenceLoss()
+        mu = torch.randn(4, 8, requires_grad=True)
+        log_sigma = torch.randn(4, 8, requires_grad=True)
+        loss_fn(mu, log_sigma).backward()
+        assert mu.grad is not None
+        assert log_sigma.grad is not None
+
+
+class TestKLRegularisedMixin:
+    """Tests for :class:`~dcba.wrappers.base.KLRegularisedMixin._kl_term`."""
+
+    _KL = KLDivergenceLoss()
+
+    def _stub(self, beta: float, warmup_steps: int = 0, step: int = 0) -> _KLMixinStub:
+        return _KLMixinStub(self._KL, beta_kl=beta, kl_warmup_steps=warmup_steps, global_step=step)
+
+    def test_no_warmup_uses_full_beta(self) -> None:
+        """With warmup_steps=0, effective_beta must equal beta_kl from step 0."""
+        stub = self._stub(beta=0.5, warmup_steps=0, step=0)
+        log_sigma = torch.zeros(4, 8)
+        mu2 = torch.ones(4, 8)
+        result = stub._kl_term(mu2, log_sigma, batch_size=4, stage="train")
+        raw_kl = self._KL(mu2, log_sigma).item()
+        assert abs(result.item() - 0.5 * raw_kl) < 1e-5
+
+    def test_warmup_beta_zero_at_step_zero(self) -> None:
+        """At global_step=0 with warmup active, effective_beta=0 so the term is zero."""
+        stub = self._stub(beta=1.0, warmup_steps=100, step=0)
+        mu = torch.ones(4, 8)
+        log_sigma = torch.zeros(4, 8)
+        result = stub._kl_term(mu, log_sigma, batch_size=4, stage="train")
+        assert result.item() == 0.0
+
+    def test_warmup_full_beta_at_warmup_steps(self) -> None:
+        """At global_step == warmup_steps, effective_beta must equal beta_kl."""
+        beta = 0.3
+        warmup = 50
+        stub = self._stub(beta=beta, warmup_steps=warmup, step=warmup)
+        mu = torch.ones(4, 8)
+        log_sigma = torch.zeros(4, 8)
+        raw_kl = self._KL(mu, log_sigma).item()
+        result = stub._kl_term(mu, log_sigma, batch_size=4, stage="train")
+        assert abs(result.item() - beta * raw_kl) < 1e-5
+
+    def test_beta_clamped_after_warmup(self) -> None:
+        """Beyond warmup_steps, effective_beta must not exceed beta_kl."""
+        beta = 0.7
+        warmup = 10
+        stub = self._stub(beta=beta, warmup_steps=warmup, step=warmup * 10)
+        mu = torch.ones(4, 8)
+        log_sigma = torch.zeros(4, 8)
+        raw_kl = self._KL(mu, log_sigma).item()
+        result = stub._kl_term(mu, log_sigma, batch_size=4, stage="train")
+        assert abs(result.item() - beta * raw_kl) < 1e-5
 
 
 def _make_batch(

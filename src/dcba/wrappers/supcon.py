@@ -14,10 +14,10 @@ from torch import Tensor
 
 from dcba.dataset import ABCDConfigScaler
 from dcba.dataset.transforms import ABCD_CONFIG_KEYS
-from dcba.wrappers.base import DCBABaseWrapper
+from dcba.wrappers.base import DCBABaseWrapper, KLRegularisedMixin
 
 
-class DCBASupConWrapper(DCBABaseWrapper):
+class DCBASupConWrapper(KLRegularisedMixin, DCBABaseWrapper):
     """
     LightningModule for joint training of graph and config encoders.
 
@@ -31,17 +31,25 @@ class DCBASupConWrapper(DCBABaseWrapper):
       and ``z_theta`` providing cross-modal positives and negatives.
 
     Both encoders are trained jointly.
-    Logs ``{stage}_loss``, ``{stage}_l_reg``, and ``{stage}_l_supcon`` at every step.
+    Logs ``{stage}_loss``, ``{stage}_loss-reg-t``, ``{stage}_loss-reg-g``, and
+    ``{stage}_loss-contr`` at every step; ``{stage}_loss-kl`` when ``kl_loss`` is set.
 
     :param graph_encoder: GNN that produces ``(z_g, theta_hat)`` -- in practice
         :class:`~dcba.models.gin_encoder.GINEncoder`.
-    :param config_encoder: MLP autoencoder that produces ``(z_theta, theta_hat)`` -- in practice
-        :class:`~dcba.models.config_autoencoder.ConfigAutoEncoder`.
+    :param config_encoder: MLP encoder that produces ``(z_theta, theta_hat)`` -- either
+        :class:`~dcba.models.config_ae.ConfigAutoEncoder` (plain AE baseline) or
+        :class:`~dcba.models.config_vae.ConfigVAE` (VAE with KL regularisation).
     :param optimizer_config: AdamW hyperparameters dict, expected keys ``lr`` and ``weight_decay``.
     :param reg_loss: Loss module applied to ``(theta_hat, theta)`` for the regression term.
     :param supcon_loss: Pre-built :class:`~dcba.training.loss.MultiPositiveSupConLoss` instance.
     :param lambda_supcon: Weight ``lambda`` applied to the contrastive loss term.
     :param scaler: Optional scaler for inverse-transforming tensors before test logging.
+    :param kl_loss: Optional KL divergence loss module; only used with
+        :class:`~dcba.models.config_vae.ConfigVAE`.  When ``None`` the AE path is unaffected.
+    :param beta_kl: Target weight for the KL term at steady state.
+    :param kl_warmup_epochs: Number of epochs over which ``beta_kl`` is linearly annealed from 0
+        to its target value.  Converted to steps at the start of training so the schedule is
+        independent of batch size.  Set to 0 to use a constant ``beta_kl`` from step 0.
     """
 
     def __init__(
@@ -53,11 +61,14 @@ class DCBASupConWrapper(DCBABaseWrapper):
         supcon_loss: nn.Module,
         lambda_supcon: float = 1.0,
         scaler: ABCDConfigScaler | None = None,
+        kl_loss: nn.Module | None = None,
+        beta_kl: float = 1.0,
+        kl_warmup_epochs: int = 0,
     ) -> None:
         """Initialise with both encoders, optimiser settings, and loss hyperparameters."""
         super().__init__()
         self.save_hyperparameters(
-            ignore=["graph_encoder", "config_encoder", "reg_loss", "supcon_loss"]
+            ignore=["graph_encoder", "config_encoder", "reg_loss", "supcon_loss", "kl_loss"]
         )
         self._graph_encoder = graph_encoder
         self._config_encoder = config_encoder
@@ -65,6 +76,10 @@ class DCBASupConWrapper(DCBABaseWrapper):
         self._lambda_supcon = lambda_supcon
         self._reg_loss = reg_loss
         self._supcon_loss = supcon_loss
+        self._kl_loss = kl_loss
+        self._beta_kl = beta_kl
+        self._kl_warmup_epochs = kl_warmup_epochs
+        self._kl_warmup_steps = 0
         self._scaler = scaler
         self._test_rows: list[tuple[str, int, list[float], list[float], list[float]]] = []
 
@@ -93,9 +108,20 @@ class DCBASupConWrapper(DCBABaseWrapper):
 
     def _step(self, batch: DCBAHeteroData, stage: str) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         config = self._unpack_batch(batch)
+        batch_size = cast(int, batch.batch_size)
 
         z_g = F.normalize(self._graph_encoder.encode(batch), dim=-1)
-        z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
+
+        # When KL is active, call encode_distribution once and sample manually so that
+        # (mu, log_sigma) are available for _kl_term without a second trunk forward pass.
+        if self._kl_loss is not None:
+            mu, log_sigma = self._config_encoder.encode_distribution(config)  # type: ignore[operator]
+            z_raw = (mu + torch.exp(log_sigma) * torch.randn_like(mu)) if self.training else mu
+            z_theta = F.normalize(z_raw, dim=-1)
+        else:
+            z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
+            mu = log_sigma = None
+
         theta_hat_zt = self._config_encoder.decode(z_theta)
         theta_hat_zg = self._config_encoder.decode(z_g)
 
@@ -106,7 +132,9 @@ class DCBASupConWrapper(DCBABaseWrapper):
         l_supcon = self._supcon_loss(z_g, z_theta, labels, config)
         loss = l_reg_zg + l_reg_zt + self._lambda_supcon * l_supcon
 
-        batch_size = cast(int, batch.batch_size)
+        if mu is not None:
+            loss = loss + self._kl_term(mu, log_sigma, batch_size, stage)  # type: ignore[arg-type]
+
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch_size)
         self.log(f"{stage}_loss-reg-t", l_reg_zt, batch_size=batch_size)
         self.log(f"{stage}_loss-reg-g", l_reg_zg, batch_size=batch_size)

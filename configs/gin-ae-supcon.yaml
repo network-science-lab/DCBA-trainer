@@ -54,8 +54,8 @@ training:
       weight_decay: 0.00001
   logger:
     project: dcba
-    name: mm-supcon
-    tags: [big-dataset, fixed-supcon, tiny-mlp]
+    name: gin-ae-supcon
+    tags: [gin, abcd-constraint, bidirectional, batch64]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss
