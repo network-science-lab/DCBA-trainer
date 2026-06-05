@@ -10,6 +10,7 @@ from dcba.datamodule import ABCDDataModule
 from dcba.dataset import ABCDConfigScaler, ABCDConfigSchema, ABCDConfigToTensor
 from dcba.models.config_autoencoder import ConfigAutoEncoder
 from dcba.models.gin_encoder import GINEncoder
+from dcba.models.gps_encoder import GPSEncoder
 from dcba.training.callbacks import get_callbacks
 from dcba.training.loggers import get_logger
 from dcba.training.loss import (
@@ -26,6 +27,7 @@ _WRAPPERS = {
 _MODELS = {
     "ConfigAutoEncoder": ConfigAutoEncoder,
     "GINEncoder": GINEncoder,
+    "GPSEncoder": GPSEncoder,
 }
 
 _LOSSES: dict[str, type[nn.Module]] = {
