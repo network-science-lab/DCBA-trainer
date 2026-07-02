@@ -34,18 +34,20 @@ def per_variable_regression_metrics(
     for i, key in enumerate(keys):
         true_col = y_true[:, i]
         pred_col = y_pred[:, i]
-        results[key] = _column_metrics(true_col, pred_col)
+        results[key] = _column_metrics(true_col, pred_col, is_integer=i in int_indices)
         if i in int_indices:
             results[key]["within_k_accuracy"] = _within_k_accuracy(true_col, pred_col, within_k)
     return results
 
 
-def _column_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+def _column_metrics(y_true: np.ndarray, y_pred: np.ndarray, is_integer: bool) -> dict[str, float]:
     """
     Compute r2, pearson_r, relative_error, and nrmse for a single variable column.
 
     :param y_true: ``(N,)`` ground-truth values for one variable.
     :param y_pred: ``(N,)`` predicted values for one variable.
+    :param is_integer: Whether this variable is integer/count-valued; passed through to
+        :func:`_mean_relative_error` to pick an appropriate denominator floor.
 
     :returns: Dict with keys ``r2``, ``pearson_r``, ``relative_error``, ``nrmse``.
     """
@@ -59,26 +61,30 @@ def _column_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     return {
         "r2": 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan"),
         "pearson_r": _pearson_r(y_true, y_pred),
-        "relative_error": _mean_relative_error(y_true, y_pred),
+        "relative_error": _mean_relative_error(y_true, y_pred, is_integer),
         "nrmse": rmse / true_std if true_std > 0 else float("nan"),
     }
 
 
-def _mean_relative_error(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+def _mean_relative_error(y_true: np.ndarray, y_pred: np.ndarray, is_integer: bool) -> float:
     """
     Compute the mean absolute percentage error: the per-sample relative error, then averaged.
 
     Some ABCD parameters (e.g. ``xi``, ``nout``) can be exactly 0 for a given sample, so the
-    denominator is floored at machine epsilon rather than the raw ``|y_true|`` -- following
-    the same convention as ``sklearn.metrics.mean_absolute_percentage_error`` -- to avoid a
-    division by zero while still surfacing a very large ratio for near-zero true values.
+    denominator is floored rather than using the raw ``|y_true|``, to avoid a division by zero.
+    For integer/count variables (e.g. ``nout``), which commonly take the value 0 exactly, the
+    floor is 1 -- a unit of error against a true value of 0 then reads as 100%. For continuous
+    variables, which essentially never land on exactly 0, the floor is machine epsilon --
+    following the same convention as ``sklearn.metrics.mean_absolute_percentage_error``.
 
     :param y_true: ``(N,)`` ground-truth values for one variable.
     :param y_pred: ``(N,)`` predicted values for one variable.
+    :param is_integer: Whether this variable is integer/count-valued.
 
-    :returns: Mean of ``|pred_i - true_i| / max(|true_i|, eps)`` over all samples.
+    :returns: Mean of ``|pred_i - true_i| / max(|true_i|, floor)`` over all samples.
     """
-    denom = np.maximum(np.abs(y_true), np.finfo(np.float64).eps)
+    floor = 1.0 if is_integer else np.finfo(np.float64).eps
+    denom = np.maximum(np.abs(y_true), floor)
     return float(np.mean(np.abs(y_pred - y_true) / denom))
 
 

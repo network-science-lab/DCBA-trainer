@@ -23,6 +23,7 @@ dependencies = [
     "wandb>=0.25.1",
     "numpy>=2.0.2",
     "matplotlib>=3.11.0",
+    "pandas>=2.2.3",
 ]
 
 [dependency-groups]

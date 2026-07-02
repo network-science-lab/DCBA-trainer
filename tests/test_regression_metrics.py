@@ -102,3 +102,15 @@ class TestPerVariableRegressionMetrics:
         assert metrics["relative_error"] > 1e6
         assert np.isnan(metrics["r2"])
         assert np.isnan(metrics["nrmse"])
+
+    def test_zero_true_values_floor_at_one_for_integer_variables(self) -> None:
+        """Integer/count variables floor the relative_error denominator at 1, not epsilon."""
+        y_true = np.zeros((10, 1))
+        y_pred = np.linspace(-1.0, 1.0, 10).reshape(-1, 1)
+
+        metrics = per_variable_regression_metrics(
+            y_true, y_pred, keys=["nout"], int_indices=[0], within_k=1
+        )["nout"]
+
+        # Denominator floored at 1, so relative_error is just the mean absolute error here.
+        assert metrics["relative_error"] == np.mean(np.abs(y_pred))

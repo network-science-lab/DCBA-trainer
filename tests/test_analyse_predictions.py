@@ -25,12 +25,12 @@ class TestReshapePredictions:
 
     def test_strips_norm_suffix_from_keys(self) -> None:
         """Variable names have the _norm suffix stripped when no scaler was used."""
-        _, _, _, keys = _reshape_predictions(self._COLUMNS, self._DATA)
+        _, _, _, keys, _ = _reshape_predictions(self._COLUMNS, self._DATA)
         assert keys == ["n", "xi"]
 
     def test_arrays_are_aligned_by_sample_and_kind(self) -> None:
         """orig/regr/cross rows land in the array row matching their sample index."""
-        orig, regr, cross, _ = _reshape_predictions(self._COLUMNS, self._DATA)
+        orig, regr, cross, _, _ = _reshape_predictions(self._COLUMNS, self._DATA)
         np.testing.assert_array_equal(orig, [[100.0, 0.3], [200.0, 0.5]])
         np.testing.assert_array_equal(regr, [[101.0, 0.31], [199.0, 0.49]])
         np.testing.assert_array_equal(cross, [[98.0, 0.29], [205.0, 0.52]])
@@ -46,7 +46,7 @@ class TestReshapePredictions:
             ["10-regr", "inst-b", 1, 4.1],
             ["10-crsm", "inst-b", 1, 3.9],
         ]
-        orig, _, _, _ = _reshape_predictions(columns, data)
+        orig, _, _, _, _ = _reshape_predictions(columns, data)
         np.testing.assert_array_equal(orig, [[3.0], [4.0]])
 
     def test_keys_without_scaler_suffix_are_unchanged(self) -> None:
@@ -57,8 +57,14 @@ class TestReshapePredictions:
             ["0-regr", "inst-a", 0, 101.0],
             ["0-crsm", "inst-a", 0, 98.0],
         ]
-        _, _, _, keys = _reshape_predictions(columns, data)
+        _, _, _, keys, _ = _reshape_predictions(columns, data)
         assert keys == ["n"]
+
+    def test_meta_indexed_by_row_position_matching_arrays(self) -> None:
+        """Meta holds one (instance, replica) row per sample, in the same order as the arrays."""
+        _, _, _, _, meta = _reshape_predictions(self._COLUMNS, self._DATA)
+        assert list(meta["instance"]) == ["inst-a", "inst-b"]
+        assert list(meta["replica"]) == [0, 1]
 
 
 class TestBuildMetricsTable:
