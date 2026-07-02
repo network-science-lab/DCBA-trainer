@@ -27,8 +27,8 @@ def per_variable_regression_metrics(
 
     :returns: Dict mapping each variable name to a dict of metric name -> value. Metrics are
         ``r2``, ``pearson_r``, ``relative_error``, ``nrmse``, and (for ``int_indices`` columns
-        only) ``within_k_accuracy``. Metrics that would require dividing by zero (a constant
-        ``y_true`` column) are reported as ``nan`` rather than raising.
+        only) ``within_k_accuracy``. ``r2``/``nrmse`` are reported as ``nan`` rather than
+        raising when ``y_true`` is constant (zero variance).
     """
     results: dict[str, dict[str, float]] = {}
     for i, key in enumerate(keys):
@@ -51,8 +51,6 @@ def _column_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     """
     residuals = y_pred - y_true
     true_std = float(np.std(y_true))
-    true_mean_abs = float(np.mean(np.abs(y_true)))
-    mae = float(np.mean(np.abs(residuals)))
     rmse = float(np.sqrt(np.mean(residuals**2)))
 
     ss_res = float(np.sum(residuals**2))
@@ -61,9 +59,27 @@ def _column_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     return {
         "r2": 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan"),
         "pearson_r": _pearson_r(y_true, y_pred),
-        "relative_error": mae / true_mean_abs if true_mean_abs > 0 else float("nan"),
+        "relative_error": _mean_relative_error(y_true, y_pred),
         "nrmse": rmse / true_std if true_std > 0 else float("nan"),
     }
+
+
+def _mean_relative_error(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """
+    Compute the mean absolute percentage error: the per-sample relative error, then averaged.
+
+    Some ABCD parameters (e.g. ``xi``, ``nout``) can be exactly 0 for a given sample, so the
+    denominator is floored at machine epsilon rather than the raw ``|y_true|`` -- following
+    the same convention as ``sklearn.metrics.mean_absolute_percentage_error`` -- to avoid a
+    division by zero while still surfacing a very large ratio for near-zero true values.
+
+    :param y_true: ``(N,)`` ground-truth values for one variable.
+    :param y_pred: ``(N,)`` predicted values for one variable.
+
+    :returns: Mean of ``|pred_i - true_i| / max(|true_i|, eps)`` over all samples.
+    """
+    denom = np.maximum(np.abs(y_true), np.finfo(np.float64).eps)
+    return float(np.mean(np.abs(y_pred - y_true) / denom))
 
 
 def _pearson_r(y_true: np.ndarray, y_pred: np.ndarray) -> float:

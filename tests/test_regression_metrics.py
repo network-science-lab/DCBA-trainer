@@ -39,6 +39,19 @@ class TestPerVariableRegressionMetrics:
         assert 0.0 < metrics["relative_error"] < 0.2
         assert 0.0 < metrics["nrmse"] < 0.2
 
+    def test_relative_error_is_mean_of_per_sample_ratios(self) -> None:
+        """relative_error averages |pred_i - true_i| / |true_i| per sample, not MAE / mean(true)."""
+        y_true = np.array([[1.0], [10.0]])
+        y_pred = np.array([[1.5], [11.0]])
+        # Per-sample ratios: |0.5|/1 = 0.5, |1.0|/10 = 0.1 -> mean = 0.3.
+        # Ratio of aggregates would instead give MAE / mean(|true|) = 0.75 / 5.5 ~= 0.136.
+
+        metrics = per_variable_regression_metrics(
+            y_true, y_pred, keys=["x"], int_indices=[], within_k=0
+        )["x"]
+
+        assert metrics["relative_error"] == 0.3
+
     def test_within_k_accuracy_matches_hand_computed_value(self) -> None:
         """within_k_accuracy for k=1 matches a manually verified fraction on a fixed array."""
         y_true = np.array([[1.0], [2.0], [3.0], [4.0]])
@@ -73,11 +86,11 @@ class TestPerVariableRegressionMetrics:
 
         assert np.isnan(metrics["r2"])
         assert np.isnan(metrics["nrmse"])
-        # relative_error uses mean(abs(y_true)) == 5.0, which is non-zero, so it stays finite.
+        # relative_error is a per-sample ratio, well-defined even when y_true is constant.
         assert not np.isnan(metrics["relative_error"])
 
-    def test_constant_true_column_at_zero_returns_nan_relative_error(self) -> None:
-        """A constant y_true column of zeros also yields nan for relative_error."""
+    def test_zero_true_values_floor_relative_error_instead_of_nan(self) -> None:
+        """A y_true of all zeros yields a large but finite relative_error, never nan/inf."""
         y_true = np.zeros((10, 1))
         y_pred = np.linspace(-1.0, 1.0, 10).reshape(-1, 1)
 
@@ -85,6 +98,7 @@ class TestPerVariableRegressionMetrics:
             y_true, y_pred, keys=["zero"], int_indices=[], within_k=1
         )["zero"]
 
-        assert np.isnan(metrics["relative_error"])
+        assert np.isfinite(metrics["relative_error"])
+        assert metrics["relative_error"] > 1e6
         assert np.isnan(metrics["r2"])
         assert np.isnan(metrics["nrmse"])
