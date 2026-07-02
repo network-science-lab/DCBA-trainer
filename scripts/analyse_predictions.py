@@ -35,7 +35,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "run_path",
         nargs="?",
-        default="network-science-lab/DCBA/2kolqt2w",
+        default="network-science-lab/DCBA/j7igczgu",
         help="wandb run path, e.g. entity/project/run_id",
     )
     parser.add_argument(
@@ -165,26 +165,32 @@ def _print_metrics_rows(rows: list[list]) -> None:
         )
 
 
-def _render_metrics_table_figure(rows: list[list]) -> plt.Figure:
+def _render_metrics_table_figure(tables: list[tuple[str, list[list]]], run_id: str) -> plt.Figure:
     """
-    Render metrics rows as a matplotlib table figure, for the PDF report's summary page.
+    Render one metrics table per path side by side in a single matplotlib figure.
 
-    :param rows: Metric rows, as returned by :func:`_compute_metrics_rows`.
+    :param tables: ``(title, rows)`` pairs, one per path, rendered left to right in order.
+    :param run_id: wandb run id, printed as the report's title-page header.
 
     :returns: The created figure. Caller owns it and is responsible for closing it.
     """
-    fig, ax = plt.subplots(figsize=(11, 0.4 * len(rows) + 1.5))
-    ax.axis("off")
-    cell_text = [
-        ["" if v is None else f"{v:.4g}" if isinstance(v, float) else str(v) for v in row]
-        for row in rows
-    ]
-    table = ax.table(cellText=cell_text, colLabels=_METRIC_COLUMNS, loc="center", cellLoc="center")
-    table.auto_set_font_size(False)
-    table.set_fontsize(8)
-    table.auto_set_column_width(col=list(range(len(_METRIC_COLUMNS))))
-    ax.set_title("Per-variable regression metrics", fontweight="bold")
-    fig.tight_layout()
+    max_rows = max(len(rows) for _, rows in tables)
+    fig, axes = plt.subplots(1, len(tables), figsize=(5.5 * len(tables), 0.4 * max_rows + 3))
+    for ax, (title, rows) in zip(axes, tables, strict=True):
+        ax.axis("off")
+        cell_text = [
+            ["" if v is None else f"{v:.4g}" if isinstance(v, float) else str(v) for v in row]
+            for row in rows
+        ]
+        table = ax.table(
+            cellText=cell_text, colLabels=_METRIC_COLUMNS, loc="center", cellLoc="center"
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(8)
+        table.auto_set_column_width(col=list(range(len(_METRIC_COLUMNS))))
+        ax.set_title(title, fontweight="bold")
+    fig.suptitle(f"Run ID: {run_id}", fontsize=10)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
     return fig
 
 
@@ -195,9 +201,10 @@ def _build_pdf_report(
     regr: np.ndarray,
     cross: np.ndarray,
     keys: list[str],
+    run_id: str,
 ) -> None:
     """
-    Render the metrics table and every per-variable scatter/residual plot into one PDF.
+    Render the metrics tables and every per-variable scatter/residual plot into one PDF.
 
     Each page is added straight from its matplotlib ``Figure`` via ``PdfPages``, so pages stay
     vector graphics instead of being rasterised the way a per-image upload would be.
@@ -208,9 +215,17 @@ def _build_pdf_report(
     :param regr: ``(N, 9)`` config-encoder self-reconstruction predictions.
     :param cross: ``(N, 9)`` graph-encoder -> theta cross-modal predictions.
     :param keys: Variable names, in column order.
+    :param run_id: wandb run id, printed on the report's title page.
     """
     with PdfPages(pdf_path) as pdf:
-        table_fig = _render_metrics_table_figure(rows)
+        tables = [
+            (
+                f"Per-variable regression metrics -- {path_name}",
+                [r for r in rows if r[1] == path_name],
+            )
+            for path_name in ("regr", "cross")
+        ]
+        table_fig = _render_metrics_table_figure(tables, run_id=run_id)
         pdf.savefig(table_fig)
         plt.close(table_fig)
 
@@ -247,7 +262,7 @@ def main() -> None:
         report_dir = Path(report_dir)
         report_dir.mkdir(parents=True, exist_ok=True)
         pdf_path = report_dir / "analysis_report.pdf"
-        _build_pdf_report(pdf_path, rows, orig, regr, cross, keys)
+        _build_pdf_report(pdf_path, rows, orig, regr, cross, keys, run_id=run.id)
 
         with (report_dir / "regression_metrics.csv").open("w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
