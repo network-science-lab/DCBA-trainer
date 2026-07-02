@@ -7,7 +7,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-from analyse_predictions import _build_metrics_table, _reshape_predictions  # noqa: E402
+from analyse_predictions import _compute_metrics_rows, _reshape_predictions  # noqa: E402
 
 
 class TestReshapePredictions:
@@ -67,24 +67,24 @@ class TestReshapePredictions:
         assert list(meta["replica"]) == [0, 1]
 
 
-class TestBuildMetricsTable:
-    """Tests for _build_metrics_table."""
+class TestComputeMetricsRows:
+    """Tests for _compute_metrics_rows."""
+
+    # Index 0 ("n") is integer-valued per ABCD_INT_FEATURE_INDICES; index 1 ("xi") is not.
+    _KEYS = ["n", "xi"]
+    _ORIG = np.array([[10.0, 0.3], [20.0, 0.5], [15.0, 0.4]])
+    _REGR = np.array([[10.0, 0.3], [20.0, 0.5], [15.0, 0.4]])
+    _CROSS = np.array([[11.0, 0.31], [19.0, 0.49], [16.0, 0.42]])
 
     def test_one_row_per_variable_and_path(self) -> None:
-        """The table has len(keys) * len(per_path_metrics) rows."""
-        per_path_metrics = {
-            "regr": {"n": {"r2": 1.0, "pearson_r": 1.0, "relative_error": 0.0, "nrmse": 0.0}},
-            "cross": {"n": {"r2": 0.9, "pearson_r": 0.95, "relative_error": 0.1, "nrmse": 0.2}},
-        }
-        table = _build_metrics_table(per_path_metrics, keys=["n"])
-        assert len(table.data) == 2
-        assert {row[0] for row in table.data} == {"n"}
-        assert {row[1] for row in table.data} == {"regr", "cross"}
+        """The rows list has len(keys) * len(paths) entries, one per (variable, path) pair."""
+        rows = _compute_metrics_rows(self._ORIG, self._REGR, self._CROSS, self._KEYS, within_k=1)
+        assert len(rows) == 4
+        assert {row[0] for row in rows} == {"n", "xi"}
+        assert {row[1] for row in rows} == {"regr", "cross"}
 
     def test_missing_within_k_accuracy_becomes_none(self) -> None:
-        """Non-integer variables without within_k_accuracy get None in that column."""
-        per_path_metrics = {
-            "regr": {"xi": {"r2": 1.0, "pearson_r": 1.0, "relative_error": 0.0, "nrmse": 0.0}},
-        }
-        table = _build_metrics_table(per_path_metrics, keys=["xi"])
-        assert table.data[0][-1] is None
+        """Variables outside ABCD_INT_FEATURE_INDICES get None for within_k_accuracy."""
+        rows = _compute_metrics_rows(self._ORIG, self._REGR, self._CROSS, self._KEYS, within_k=1)
+        assert all(row[-1] is None for row in rows if row[0] == "xi")
+        assert all(row[-1] is not None for row in rows if row[0] == "n")

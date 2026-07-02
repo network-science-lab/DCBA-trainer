@@ -1,26 +1,17 @@
-"""Per-variable regression diagnostics for a supcon test run, re-uploaded to wandb.
-
-Fetches the ``test/predictions`` wandb.Table logged by
-:meth:`~dcba.wrappers.supcon.DCBASupConWrapper.on_test_epoch_end`, computes per-variable
-regression metrics for both the ``regr`` (config-encoder self-reconstruction) and ``cross``
-(graph-encoder -> theta) prediction paths, and logs a metrics table plus per-variable
-scatter/residual plots back to the same run under the ``analysis/`` prefix.
-
-Usage::
-
-    uv run python scripts/analyse_predictions.py <entity>/<project>/<run_id>
-"""
+"""Per-variable regression diagnostics for a supcon test run, re-uploaded to wandb."""
 
 import argparse
 import csv
 import json
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import wandb
+from matplotlib.backends.backend_pdf import PdfPages
 from wandb.apis.public import Run
 
 from dcba.dataset import ABCD_INT_FEATURE_INDICES
@@ -44,22 +35,20 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "run_path",
         nargs="?",
-        default="network-science-lab/DCBA/vi1csr7r",
+        default="network-science-lab/DCBA/2kolqt2w",
         help="wandb run path, e.g. entity/project/run_id",
     )
     parser.add_argument(
         "--within-k",
         type=int,
-        default=1,
+        default=10,
         help="Tolerance for the within-k accuracy metric on integer-valued ABCD parameters.",
     )
     parser.add_argument(
         "--dump-dir",
         type=Path,
         default=None,
-        # default="./dump",
-        help="If set, also write the analysis payload (plots + metrics table) to this local "
-        "directory for offline inspection.",
+        help="If set, also write the analysis payload to this directory for offline inspection.",
     )
     return parser.parse_args()
 
@@ -128,20 +117,25 @@ def _reshape_predictions(
     return orig, regr, cross, keys, meta
 
 
-def _build_metrics_table(
-    per_path_metrics: dict[str, dict[str, dict[str, float]]], keys: list[str]
-) -> wandb.Table:
+def _compute_metrics_rows(
+    orig: np.ndarray, regr: np.ndarray, cross: np.ndarray, keys: list[str], within_k: int
+) -> list[list]:
     """
-    Flatten per-path, per-variable metric dicts into a single wandb.Table.
+    Compute per-variable regression metrics for both prediction paths as flat table rows.
 
-    :param per_path_metrics: Maps path name (``"regr"``/``"cross"``) to the dict returned by
-        :func:`~dcba.training.metrics.per_variable_regression_metrics`.
+    :param orig: ``(N, 9)`` ground-truth config values.
+    :param regr: ``(N, 9)`` config-encoder self-reconstruction predictions.
+    :param cross: ``(N, 9)`` graph-encoder -> theta cross-modal predictions.
     :param keys: Variable names, in column order.
+    :param within_k: Tolerance for the within-k accuracy metric.
 
     :returns: One row per ``(variable, path)`` pair, columns as in :data:`_METRIC_COLUMNS`.
     """
     rows = []
-    for path_name, metrics in per_path_metrics.items():
+    for path_name, predictions in (("regr", regr), ("cross", cross)):
+        metrics = per_variable_regression_metrics(
+            orig, predictions, keys, ABCD_INT_FEATURE_INDICES, within_k
+        )
         for key in keys:
             m = metrics[key]
             rows.append(
@@ -155,15 +149,15 @@ def _build_metrics_table(
                     m.get("within_k_accuracy"),
                 ]
             )
-    return wandb.Table(columns=_METRIC_COLUMNS, data=rows)
+    return rows
 
 
-def _print_metrics_table(table: wandb.Table) -> None:
-    """Print a wandb.Table's rows as a plain-text table on stdout."""
+def _print_metrics_rows(rows: list[list]) -> None:
+    """Print metrics rows as a plain-text table on stdout."""
     header = " | ".join(_METRIC_COLUMNS)
     print(header)
     print("-" * len(header))
-    for row in table.data:
+    for row in rows:
         print(
             " | ".join(
                 "" if v is None else f"{v:.4g}" if isinstance(v, float) else str(v) for v in row
@@ -171,60 +165,66 @@ def _print_metrics_table(table: wandb.Table) -> None:
         )
 
 
-def _build_analysis_payload(
-    orig: np.ndarray, regr: np.ndarray, cross: np.ndarray, keys: list[str], within_k: int
-) -> dict[str, wandb.Table | wandb.Image]:
+def _render_metrics_table_figure(rows: list[list]) -> plt.Figure:
     """
-    Compute per-variable metrics and plots for both prediction paths.
+    Render metrics rows as a matplotlib table figure, for the PDF report's summary page.
 
+    :param rows: Metric rows, as returned by :func:`_compute_metrics_rows`.
+
+    :returns: The created figure. Caller owns it and is responsible for closing it.
+    """
+    fig, ax = plt.subplots(figsize=(11, 0.4 * len(rows) + 1.5))
+    ax.axis("off")
+    cell_text = [
+        ["" if v is None else f"{v:.4g}" if isinstance(v, float) else str(v) for v in row]
+        for row in rows
+    ]
+    table = ax.table(cellText=cell_text, colLabels=_METRIC_COLUMNS, loc="center", cellLoc="center")
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.auto_set_column_width(col=list(range(len(_METRIC_COLUMNS))))
+    ax.set_title("Per-variable regression metrics", fontweight="bold")
+    fig.tight_layout()
+    return fig
+
+
+def _build_pdf_report(
+    pdf_path: Path,
+    rows: list[list],
+    orig: np.ndarray,
+    regr: np.ndarray,
+    cross: np.ndarray,
+    keys: list[str],
+) -> None:
+    """
+    Render the metrics table and every per-variable scatter/residual plot into one PDF.
+
+    Each page is added straight from its matplotlib ``Figure`` via ``PdfPages``, so pages stay
+    vector graphics instead of being rasterised the way a per-image upload would be.
+
+    :param pdf_path: Destination path for the PDF file.
+    :param rows: Metric rows, as returned by :func:`_compute_metrics_rows`.
     :param orig: ``(N, 9)`` ground-truth config values.
     :param regr: ``(N, 9)`` config-encoder self-reconstruction predictions.
     :param cross: ``(N, 9)`` graph-encoder -> theta cross-modal predictions.
     :param keys: Variable names, in column order.
-    :param within_k: Tolerance for the within-k accuracy metric.
-
-    :returns: Dict ready to pass to ``wandb.Run.log``, keyed under the ``analysis/`` prefix.
     """
-    payload: dict[str, wandb.Table | wandb.Image] = {}
-    per_path_metrics: dict[str, dict[str, dict[str, float]]] = {}
+    with PdfPages(pdf_path) as pdf:
+        table_fig = _render_metrics_table_figure(rows)
+        pdf.savefig(table_fig)
+        plt.close(table_fig)
 
-    for path_name, predictions in (("regr", regr), ("cross", cross)):
-        per_path_metrics[path_name] = per_variable_regression_metrics(
-            orig, predictions, keys, ABCD_INT_FEATURE_INDICES, within_k
-        )
-        for i, key in enumerate(keys):
-            scatter_fig = scatter_pred_vs_true(orig[:, i], predictions[:, i], key)
-            payload[f"analysis/{path_name}/{key}/scatter"] = wandb.Image(scatter_fig)
-            plt.close(scatter_fig)
+        for path_name, predictions in (("regr", regr), ("cross", cross)):
+            for i, key in enumerate(keys):
+                label = f"{path_name}/{key}"
 
-            residual_fig = residual_histogram(orig[:, i], predictions[:, i], key)
-            payload[f"analysis/{path_name}/{key}/residuals"] = wandb.Image(residual_fig)
-            plt.close(residual_fig)
+                scatter_fig = scatter_pred_vs_true(orig[:, i], predictions[:, i], label)
+                pdf.savefig(scatter_fig)
+                plt.close(scatter_fig)
 
-    payload["analysis/regression_metrics"] = _build_metrics_table(per_path_metrics, keys)
-    return payload
-
-
-def _dump_payload(payload: dict[str, wandb.Table | wandb.Image], dump_dir: Path) -> None:
-    """
-    Write a wandb log payload to local files for offline inspection.
-
-    Each key becomes a path under ``dump_dir`` (slashes in the key become subdirectories):
-    ``wandb.Image`` entries are saved as PNGs, ``wandb.Table`` entries as CSVs.
-
-    :param payload: Mapping of wandb log key to a ``wandb.Image`` or ``wandb.Table`` value.
-    :param dump_dir: Directory to write into; created (including subdirectories) if missing.
-    """
-    for key, value in payload.items():
-        dest = dump_dir / key
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if isinstance(value, wandb.Image):
-            value.image.save(dest.with_suffix(".png"))
-        elif isinstance(value, wandb.Table):
-            with dest.with_suffix(".csv").open("w", encoding="utf-8", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(value.columns)
-                writer.writerows(value.data)
+                residual_fig = residual_histogram(orig[:, i], predictions[:, i], label)
+                pdf.savefig(residual_fig)
+                plt.close(residual_fig)
 
 
 def main() -> None:
@@ -237,15 +237,29 @@ def main() -> None:
     columns, data = _fetch_predictions_table(run)
     orig, regr, cross, keys, meta = _reshape_predictions(columns, data)
 
-    payload = _build_analysis_payload(orig, regr, cross, keys, args.within_k)
-    _print_metrics_table(payload["analysis/regression_metrics"])
+    rows = _compute_metrics_rows(orig, regr, cross, keys, args.within_k)
+    _print_metrics_rows(rows)
 
-    if args.dump_dir is not None:
-        _dump_payload(payload, args.dump_dir)
-        print(f"Dumped analysis payload to {args.dump_dir}")
+    report_dir_ctx = (
+        nullcontext(args.dump_dir) if args.dump_dir is not None else tempfile.TemporaryDirectory()
+    )
+    with report_dir_ctx as report_dir:
+        report_dir = Path(report_dir)
+        report_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = report_dir / "analysis_report.pdf"
+        _build_pdf_report(pdf_path, rows, orig, regr, cross, keys)
 
-    with wandb.init(id=run.id, project=run.project, entity=run.entity, resume="must") as write_run:
-        write_run.log(payload)
+        with (report_dir / "regression_metrics.csv").open("w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(_METRIC_COLUMNS)
+            writer.writerows(rows)
+
+        with wandb.init(id=run.id, project=run.project, entity=run.entity, resume="must") as wrt_t:
+            wrt_t.log({"test/regression_metrics": wandb.Table(_METRIC_COLUMNS, rows)})
+            wrt_t.save(str(pdf_path), base_path=str(report_dir), policy="now")
+            wrt_t.log_artifact(
+                artifact_or_path=str(pdf_path), name=f"test-report-{run.id}", type="report"
+            )
 
 
 if __name__ == "__main__":
