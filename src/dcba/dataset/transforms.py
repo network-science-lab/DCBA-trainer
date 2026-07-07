@@ -39,30 +39,36 @@ def abcd_param_bounds(n_max: int = 10_000) -> dict[str, tuple[float, float]]:
     Return per-feature ``(lo, hi)`` bounds for ABCD config normalisation.
 
     Bounds are derived from ABCDGraphGenerator.jl hard constraints (``src/pl_sampler.jl``,
-    ``src/community_sampler.jl``, ``src/graph_sampler.jl``) and the canonical example configuration
-    (``utils/example_config.toml``).
+    ``src/community_sampler.jl``, ``src/graph_sampler.jl``) and the observed dynamic range of each
+    parameter on the ``abcd-big`` dataset (see ``scripts/check_config_scaling.py``).
 
-    ``n_max`` sets the upper bound for all features that are analytically bounded by ``n`` in the
-    Julia model (``n``, ``c_min``, ``c_max``, ``d_min``, ``d_max``,``nout``):
+    Sharing one ``n_max``-sized bound across every feature analytically bounded by ``n``
+    (``c_min, c_max, d_min, d_max, nout``) left most of them using under 5% of their scaled
+    ``[0, 1]`` range in practice (``d_min``: 0.1%), starving any loss computed on the scaled config
+    of gradient for those features regardless of encoder architecture. Each now has its own bound,
+    set from the observed max on ``abcd-big`` with roughly a 20-40% safety margin for unseen data:
         - ``t1``, ``t2``: ``@assert α >= 1`` (pl_sampler.jl); upper ~5 in practice.
         - ``xi``: ``0 ≤ ξ ≤ 1`` (hard constraint, graph_sampler.jl).
-        - All others: lower bound from Julia assertions; upper bound ``= n_max``.
+        - ``c_min``: expressed as a fraction of ``c_max`` by :class:`ABCDConfigScaler` instead of
+          against a fixed bound, since ``c_min <= c_max`` is itself a hard constraint -- a fixed
+          bound left it starved (1.1%) no matter how tight it was made, because it is fundamentally
+          relative to another feature, not to ``n``.
 
-    :param n_max: Maximum graph size in the dataset.
+    :param n_max: Maximum graph size in the dataset; only used for ``n`` itself now (see above).
 
     :returns: Dict mapping each key in :data:`ABCD_CONFIG_KEYS` to ``(lo, hi)``.
     """
     n = float(n_max)
     return {
-        "n": (1.0, n),  # @assert n > 0; example: n = 10_000
+        "n": (1.0, n),  # @assert n > 0; example: n = 10_000; observed max 9998 on abcd-big
         "t1": (1.0, 5.0),  # @assert α >= 1; power-law exponents rarely exceed 5
         "t2": (1.0, 5.0),  # @assert α >= 1; power-law exponents rarely exceed 5
         "xi": (0.0, 1.0),  # 0 ≤ ξ ≤ 1 (hard constraint)
-        "c_min": (1.0, n),  # >= 1; c_min <= c_max <= n
-        "c_max": (1.0, n),  # c_max <= n (ABCDConfig validator)
-        "d_min": (1.0, n),  # @assert 1 <= d_min
-        "d_max": (1.0, n),  # @assert d_max >= d_min
-        "nout": (0.0, n),  # 0 <= nout <= n (ABCDConfig validator)
+        "c_min": (0.0, 1.0),  # fraction of c_max, not an absolute count -- see ABCDConfigScaler
+        "c_max": (1.0, 6_000.0),  # observed max 4938 on abcd-big
+        "d_min": (1.0, 100.0),  # observed max 50 on abcd-big
+        "d_max": (1.0, 6_000.0),  # observed max 4993 on abcd-big
+        "nout": (0.0, 700.0),  # observed max 492 on abcd-big
     }
 
 
@@ -70,10 +76,12 @@ class ABCDConfigScaler:
     """
     Normalise and denormalise ABCD config tensors feature-wise to ``[0, 1]``.
 
-    Uses a linear (min-max) map per feature sourced from :func:`abcd_param_bounds`.
+    Uses a linear (min-max) map per feature sourced from :func:`abcd_param_bounds`, except
+    ``c_min``, which is scaled as ``c_min / c_max`` instead (both already ``[0, 1]``-bounded by
+    ``abcd_param_bounds`` -- see its docstring for why a fixed bound does not work for ``c_min``).
 
-    The inverse is exact (linear map), making this usable at inference time to recover
-    human-readable configs from model output.
+    The inverse is exact, making this usable at inference time to recover human-readable configs
+    from model output.
 
     :param n_max: Maximum graph size in the dataset.  Passed directly to :func:`abcd_param_bounds`.
         Defaults to 10 000, matching the canonical ABCDGraphGenerator.jl example configuration.
@@ -84,16 +92,21 @@ class ABCDConfigScaler:
         bounds = abcd_param_bounds(n_max)
         self._lo = torch.tensor([bounds[k][0] for k in ABCD_CONFIG_KEYS], dtype=torch.float32)
         self._hi = torch.tensor([bounds[k][1] for k in ABCD_CONFIG_KEYS], dtype=torch.float32)
+        self._c_min_idx = ABCD_CONFIG_KEYS.index("c_min")
+        self._c_max_idx = ABCD_CONFIG_KEYS.index("c_max")
 
     def transform(self, x: Tensor) -> Tensor:
         """
         Normalise ``x`` to ``[0, 1]`` per feature.
 
-        :param x: Float tensor of shape ``(..., 9)``.
+        :param x: Float tensor of shape ``(..., 9)``, raw (unscaled) feature values.
 
         :returns: Normalised tensor of the same shape.
         """
-        return (x - self._lo) / (self._hi - self._lo)
+        out = (x - self._lo) / (self._hi - self._lo)
+        c_max_raw = x[..., self._c_max_idx].clamp(min=1.0)
+        out[..., self._c_min_idx] = x[..., self._c_min_idx] / c_max_raw
+        return out
 
     def inverse_transform(self, x: Tensor) -> Tensor:
         """
@@ -107,6 +120,8 @@ class ABCDConfigScaler:
         :returns: Tensor in the original feature scale.
         """
         out = x * (self._hi - self._lo) + self._lo
+        # c_max must already be in its final (raw) scale before c_min can be recovered from it.
+        out[..., self._c_min_idx] = x[..., self._c_min_idx] * out[..., self._c_max_idx]
         out[..., ABCD_INT_FEATURE_INDICES] = out[..., ABCD_INT_FEATURE_INDICES].round()
         return out
 
@@ -149,6 +164,30 @@ class CommunityToSize(BaseTransform):
             _, inv, counts = torch.unique(c[active], return_inverse=True, return_counts=True)
             sizes[active, layer] = counts[inv].float() / n_active
         data["actor"].x = sizes
+        return data
+
+
+class ConstantNodeFeatures(BaseTransform):
+    """
+    Set node features to a constant, carrying no community information at all.
+
+    Ablation baseline for :class:`CommunityToSize`, to isolate how much of the graph encoder's
+    predictive power actually comes from the community-size feature versus pure graph structure.
+    Writes a tensor of ones with the same shape ``[num_actors, num_layers]`` that
+    :class:`CommunityToSize` would produce, so :class:`~dcba.models.gps_encoder.GPSEncoder` needs
+    no changes to consume it.
+    """
+
+    def forward(self, data: DCBAHeteroData) -> DCBAHeteroData:
+        """
+        Apply the transform to a single (non-batched) graph.
+
+        :param data: A single heterogeneous graph.
+
+        :returns: The same graph with ``data["actor"].x`` set to all ones.
+        """
+        n, num_layers = data["actor"].community.shape
+        data["actor"].x = torch.ones(n, num_layers, dtype=torch.float32)
         return data
 
 

@@ -32,6 +32,8 @@ class ABCDDataModule(pl.LightningDataModule):
         When ``None``, configs are kept in raw form.
     :param transform: Transform applied to each config record.  Defaults to
         :class:`~dcba.dataset.transforms.ABCDConfigToTensor`.
+    :param node_transform: Transform applied to each graph to populate ``data["actor"].x``.
+        Defaults to :class:`~dcba.dataset.transforms.CommunityToSize`.
     """
 
     def __init__(
@@ -45,6 +47,7 @@ class ABCDDataModule(pl.LightningDataModule):
         seed: int = 42,
         scaler: ABCDConfigScaler | None = None,
         transform: BaseTransform | None = None,
+        node_transform: BaseTransform | None = None,
     ) -> None:
         """Initialise the data module with dataset path and split/loader parameters."""
         super().__init__()
@@ -58,6 +61,7 @@ class ABCDDataModule(pl.LightningDataModule):
 
         self.scaler: ABCDConfigScaler | None = scaler
         self.transform: BaseTransform | None = transform
+        self.node_transform: BaseTransform | None = node_transform
         self._train_dataset: ABCDDataset | None = None
         self._val_dataset: ABCDDataset | None = None
         self._test_dataset: ABCDDataset | None = None
@@ -92,18 +96,21 @@ class ABCDDataModule(pl.LightningDataModule):
             records=[r for r in records if r.instance_id in train_ids],
             scaler=self.scaler,
             transform=self.transform,
+            node_transform=self.node_transform,
             single_replica_per_instance=self._single_replica_per_instance,
         )
         self._val_dataset = ABCDDataset(
             records=[r for r in records if r.instance_id in val_ids],
             scaler=self.scaler,
             transform=self.transform,
+            node_transform=self.node_transform,
             single_replica_per_instance=self._single_replica_per_instance,
         )
         self._test_dataset = ABCDDataset(
             records=[r for r in records if r.instance_id in test_ids],
             scaler=self.scaler,
             transform=self.transform,
+            node_transform=self.node_transform,
             single_replica_per_instance=self._single_replica_per_instance,
         )
 

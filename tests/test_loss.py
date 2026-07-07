@@ -522,16 +522,41 @@ class TestABCDConstraintPenaltyLoss:
         assert abs(loss.item() - mse.item()) < 1e-6
 
     def test_violation_increases_loss(self) -> None:
-        """A config that violates c_min <= c_max must produce a higher loss than a valid config."""
+        """A config that violates d_min <= d_max must produce a higher loss than a valid config."""
         loss_fn = ABCDConstraintPenaltyLoss(lambda_penalty=1.0)
         valid = self._make_valid()
         invalid = valid.clone()
-        invalid[:, 4] = 0.9  # c_min > c_max (0.3)
+        invalid[:, 6] = 0.9  # d_min > d_max (0.3)
         target = valid.clone()
 
         loss_valid = loss_fn(valid, target)
         loss_invalid = loss_fn(invalid, target)
         assert loss_invalid.item() > loss_valid.item()
+
+    def test_c_min_c_max_ordering_not_penalised(self) -> None:
+        """c_min > c_max in raw feature values must not be penalised (c_min is now a ratio)."""
+        loss_fn = ABCDConstraintPenaltyLoss(lambda_penalty=1.0)
+        valid = self._make_valid()
+        same_mse = valid.clone()
+        same_mse[:, 4] = 0.9  # would have violated the old absolute c_min <= c_max constraint
+        target = valid.clone()
+        target[:, 4] = 0.9  # match target so this differs from `valid` only in feature 4
+
+        loss = loss_fn(same_mse, target)
+        assert abs(loss.item()) < 1e-6
+
+    def test_per_feature_weights_scale_that_features_error(self) -> None:
+        """Upweighting a single feature must scale exactly that feature's contribution to MSE."""
+        weights = [1.0] * 9
+        weights[0] = 4.0  # upweight n (idx 0)
+        loss_fn = ABCDConstraintPenaltyLoss(lambda_penalty=0.0, weights=weights)
+        x = self._make_valid()
+        target = x.clone()
+        target[:, 0] += 0.1  # error only on n
+
+        loss = loss_fn(x, target)
+        expected = 4.0 * (0.1**2) / 9  # weighted MSE: one of 9 features has error 0.1, rest 0
+        assert abs(loss.item() - expected) < 1e-6
 
     def test_backward_passes(self) -> None:
         """Gradients must flow back through the loss to x_hat."""
@@ -543,7 +568,7 @@ class TestABCDConstraintPenaltyLoss:
     def test_lambda_penalty_scales_penalty(self) -> None:
         """Doubling lambda_penalty must produce a higher loss for a violating config."""
         x = self._make_valid()
-        x[:, 4] = 0.9  # force a violation
+        x[:, 6] = 0.9  # force a violation: d_min (0.9) > d_max (0.3)
         target = self._make_valid()
         loss_low = ABCDConstraintPenaltyLoss(lambda_penalty=0.1)(x, target)
         loss_high = ABCDConstraintPenaltyLoss(lambda_penalty=10.0)(x, target)

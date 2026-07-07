@@ -1,0 +1,75 @@
+hydra:
+  run:
+    dir: .trainings/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+random_seed: 42
+
+data:
+  dataset_root: "abcd-big"
+  transform: ABCDConfigToTensor
+  node_transform: ConstantNodeFeatures # ablation vs CommunityToSize -- see transforms.py
+  scaler:
+    name: ABCDConfigScaler
+    args:
+      n_max: 10000
+  val_ratio: 0.10
+  test_ratio: 0.10
+  batch_size: 64
+  num_workers: 0
+
+models:
+  graph:
+    cls: GPSEncoder
+    attn_type: performer
+    hidden_dim: 64
+    num_layers: 2
+    num_heads: 4
+    embedding_dim: 64
+    output_dim: 9
+    dropout: 0.1
+    attn_dropout: 0.1
+  theta:
+    cls: ConfigAutoEncoder
+    input_dim: 9
+    hidden_dims: [128, 64, 32]
+    embedding_dim: ${models.graph.embedding_dim}
+
+training:
+  wrapper: supcon
+  accelerator: gpu
+  devices: [0]
+  max_epochs: 200
+  losses:
+    reg:
+      name: abcd_constraint
+      args:
+        lambda_penalty: 1.0
+    repr:
+      name: supcon
+      weight: 0.3
+      args:
+        temperature: 0.07
+        tau_dist: 1.0
+        bidirectional: true
+  optimizer:
+    name: AdamW
+    args:
+      lr: 0.001
+      weight_decay: 0.00001
+  logger:
+    project: dcba
+    name: gps-ae-supcon-no-community-features
+    tags: [gps, no-community-features, abcd-constraint, bidirectional, batch64]
+  callbacks:
+    - name: model_checkpoint
+      monitor: val_loss
+      mode: min
+      save_top_k: 1
+      save_last: true
+      verbose: true
+    - name: early_stopping
+      monitor: val_loss
+      mode: min
+      patience: 5
+    - name: model_summary
+      max_depth: -1

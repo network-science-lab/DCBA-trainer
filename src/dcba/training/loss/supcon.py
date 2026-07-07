@@ -9,6 +9,23 @@ from torch import Tensor
 _log = logging.getLogger(__name__)
 
 
+def config_pairwise_distance(x: Tensor, y: Tensor) -> Tensor:
+    """
+    Euclidean distance between config vectors, as used for soft-negative weighting.
+
+    Pulled out as a standalone function so that downstream analysis (e.g.
+    ``scripts/embedding_stability.py``) can call the exact distance :class:`MultiPositiveSupConLoss`
+    weights negatives by, instead of an independent reimplementation that could silently drift
+    from it (e.g. if ``tau_dist`` or the metric itself changes here).
+
+    :param x: ``(N, C)`` config vectors.
+    :param y: ``(M, C)`` config vectors.
+
+    :returns: ``(N, M)`` pairwise Euclidean distance matrix.
+    """
+    return torch.cdist(x, y, p=2)
+
+
 class MultiPositiveSupConLoss(nn.Module):
     """
     Cross-modal Multi-Positive Supervised Contrastive Loss with soft-weighted negatives.
@@ -96,7 +113,7 @@ class MultiPositiveSupConLoss(nn.Module):
 
         :returns: ``(B_a, B_a + B_k)`` float weight matrix, zero on positive and self entries.
         """
-        dist = torch.cdist(anchor_configs, all_configs, p=2)  # (B_a, B_a + B_k)
+        dist = config_pairwise_distance(anchor_configs, all_configs)  # (B_a, B_a + B_k)
         weights = 1.0 - torch.exp(-dist / self.tau_dist)
         neg_mask = ~pos_mask & ~self_mask
         return weights * neg_mask.float()

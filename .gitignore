@@ -3,6 +3,7 @@
 *.egg-info
 *.json
 *.log
+.analysis/
 !.claude/settings.json
 .claude/settings.local.json
 .claude/skills/*-workspace/

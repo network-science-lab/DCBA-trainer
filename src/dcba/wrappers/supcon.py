@@ -50,6 +50,10 @@ class DCBASupConWrapper(KLRegularisedMixin, DCBABaseWrapper):
     :param kl_warmup_epochs: Number of epochs over which ``beta_kl`` is linearly annealed from 0
         to its target value.  Converted to steps at the start of training so the schedule is
         independent of batch size.  Set to 0 to use a constant ``beta_kl`` from step 0.
+    :param aux_weight: Weight applied to ``graph_encoder.aux_loss`` when present (e.g.
+        :class:`~dcba.models.gps_encoder.GPSEncoder`'s cluster-assignment entropy loss, only set
+        when that encoder's ``num_clusters > 0``). Ignored when the graph encoder does not expose
+        an ``aux_loss`` attribute or leaves it ``None``.
     """
 
     def __init__(
@@ -64,6 +68,7 @@ class DCBASupConWrapper(KLRegularisedMixin, DCBABaseWrapper):
         kl_loss: nn.Module | None = None,
         beta_kl: float = 1.0,
         kl_warmup_epochs: int = 0,
+        aux_weight: float = 0.1,
     ) -> None:
         """Initialise with both encoders, optimiser settings, and loss hyperparameters."""
         super().__init__()
@@ -80,6 +85,7 @@ class DCBASupConWrapper(KLRegularisedMixin, DCBABaseWrapper):
         self._beta_kl = beta_kl
         self._kl_warmup_epochs = kl_warmup_epochs
         self._kl_warmup_steps = 0
+        self._aux_weight = aux_weight
         self._scaler = scaler
         self._test_rows: list[tuple[str, int, list[float], list[float], list[float]]] = []
 
@@ -105,6 +111,28 @@ class DCBASupConWrapper(KLRegularisedMixin, DCBABaseWrapper):
             dtype=torch.long,
             device=device,
         )
+
+    @torch.no_grad()
+    def encode(self, batch: DCBAHeteroData) -> tuple[Tensor, Tensor]:
+        """
+        Compute unit-norm ``(z_g, z_theta)`` embeddings for a batch, without loss or logging.
+
+        For analysis/inference use (e.g. embedding-stability scripts) where only the encoder
+        outputs are needed. Uses the VAE posterior mean directly rather than sampling, matching
+        the eval-mode branch of :meth:`_step`.
+
+        :param batch: Batched heterogeneous graph data with ``.config`` attached.
+
+        :returns: ``(z_g, z_theta)``, each ``(batch, embedding_dim)`` and unit-norm.
+        """
+        config = self._unpack_batch(batch)
+        z_g = F.normalize(self._graph_encoder.encode(batch), dim=-1)
+        if self._kl_loss is not None:
+            mu, _ = self._config_encoder.encode_distribution(config)  # type: ignore[operator]
+            z_theta = F.normalize(mu, dim=-1)
+        else:
+            z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
+        return z_g, z_theta
 
     def _step(self, batch: DCBAHeteroData, stage: str) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         config = self._unpack_batch(batch)
@@ -134,6 +162,11 @@ class DCBASupConWrapper(KLRegularisedMixin, DCBABaseWrapper):
 
         if mu is not None:
             loss = loss + self._kl_term(mu, log_sigma, batch_size, stage)  # type: ignore[arg-type]
+
+        aux_loss = getattr(self._graph_encoder, "aux_loss", None)
+        if aux_loss is not None:
+            loss = loss + self._aux_weight * aux_loss
+            self.log(f"{stage}_loss-cluster-entropy", aux_loss, batch_size=batch_size)
 
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch_size)
         self.log(f"{stage}_loss-reg-t", l_reg_zt, batch_size=batch_size)

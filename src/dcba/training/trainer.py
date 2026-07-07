@@ -7,7 +7,13 @@ import torch.nn as nn
 from torch_geometric.transforms import BaseTransform
 
 from dcba.datamodule import ABCDDataModule
-from dcba.dataset import ABCDConfigScaler, ABCDConfigSchema, ABCDConfigToTensor
+from dcba.dataset import (
+    ABCDConfigScaler,
+    ABCDConfigSchema,
+    ABCDConfigToTensor,
+    CommunityToSize,
+    ConstantNodeFeatures,
+)
 from dcba.models.config_ae import ConfigAutoEncoder
 from dcba.models.config_vae import ConfigVAE
 from dcba.models.gin_encoder import GINEncoder
@@ -48,6 +54,11 @@ _TRANSFORMS: dict[str, type[BaseTransform]] = {
     "ABCDConfigToTensor": ABCDConfigToTensor,
 }
 
+_NODE_TRANSFORMS: dict[str, type[BaseTransform]] = {
+    "CommunityToSize": CommunityToSize,
+    "ConstantNodeFeatures": ConstantNodeFeatures,
+}
+
 _CONFIG_SCHEMAS: dict[str, type] = {
     "ABCDConfigSchema": ABCDConfigSchema,
 }
@@ -84,6 +95,22 @@ def _build_transform(name: str | None) -> BaseTransform:
     if name not in _TRANSFORMS:
         raise ValueError(f"Unknown transform '{name}'. Available: {list(_TRANSFORMS)}")
     return _TRANSFORMS[name]()
+
+
+def _build_node_transform(name: str | None) -> BaseTransform:
+    """
+    Instantiate a node-feature transform from its registry name.
+
+    :param name: Key in :data:`_NODE_TRANSFORMS`, or ``None`` to use the default
+        :class:`~dcba.dataset.CommunityToSize`.
+
+    :returns: A transform instance.
+    """
+    if name is None:
+        return CommunityToSize()
+    if name not in _NODE_TRANSFORMS:
+        raise ValueError(f"Unknown node transform '{name}'. Available: {list(_NODE_TRANSFORMS)}")
+    return _NODE_TRANSFORMS[name]()
 
 
 def _build_model(model_cfg: dict) -> nn.Module:
@@ -125,6 +152,46 @@ def _build_loss(loss_cfg: dict) -> nn.Module:
     return _LOSSES[name](**loss_cfg.get("args", {}))
 
 
+def build_supcon_wrapper(config: dict) -> DCBASupConWrapper:
+    """
+    Build an untrained :class:`~dcba.wrappers.supcon.DCBASupConWrapper` from a resolved config.
+
+    Shared by :func:`train` and any code that needs to reconstruct a supcon wrapper's
+    architecture from a logged run config independent of checkpoint weights (e.g. analysis
+    scripts loading a trained checkpoint via ``load_state_dict``).
+
+    :param config: Full resolved training config dict (as returned by
+        :func:`~dcba.utils.config.load_config`), with ``config["training"]["wrapper"] ==
+        "supcon"``.
+
+    :returns: An untrained :class:`~dcba.wrappers.supcon.DCBASupConWrapper`.
+    """
+    training_cfg = config["training"]
+    losses_cfg = training_cfg["losses"]
+    reg_loss = _build_loss(losses_cfg["reg"])
+    supcon_loss = _build_loss(losses_cfg["repr"])
+    graph_encoder = _build_model(config["models"]["graph"])
+    config_encoder = _build_model(config["models"]["theta"])
+    kl_cfg = losses_cfg.get("kl")
+    kl_loss = _build_loss(kl_cfg) if kl_cfg is not None else None
+    if kl_loss is not None and not isinstance(config_encoder, ConfigVAE):
+        raise TypeError(
+            f"kl_loss requires a ConfigVAE config encoder, got {type(config_encoder).__name__}."
+        )
+    return DCBASupConWrapper(
+        graph_encoder=graph_encoder,
+        config_encoder=config_encoder,
+        optimizer_config=training_cfg["optimizer"]["args"],
+        reg_loss=reg_loss,
+        supcon_loss=supcon_loss,
+        lambda_supcon=losses_cfg["repr"].get("weight", 1.0),
+        kl_loss=kl_loss,
+        beta_kl=kl_cfg.get("beta", 1.0) if kl_cfg is not None else 1.0,
+        kl_warmup_epochs=kl_cfg.get("warmup_epochs", 0) if kl_cfg is not None else 0,
+        aux_weight=training_cfg.get("aux_weight", 0.1),
+    )
+
+
 def train(config: dict) -> None:
     """
     Run a full training and test cycle.
@@ -144,6 +211,7 @@ def train(config: dict) -> None:
     data_cfg = config["data"]
     scaler = _build_scaler(data_cfg.get("scaler"))
     transform = _build_transform(data_cfg.get("transform"))
+    node_transform = _build_node_transform(data_cfg.get("node_transform"))
     datamodule = ABCDDataModule(
         dataset_root=Path(data_cfg["dataset_root"]),
         val_ratio=data_cfg["val_ratio"],
@@ -154,6 +222,7 @@ def train(config: dict) -> None:
         seed=config.get("random_seed", 42),
         scaler=scaler,
         transform=transform,
+        node_transform=node_transform,
     )
 
     if wrapper_name == "config_autoencoder":
@@ -173,28 +242,7 @@ def train(config: dict) -> None:
             kl_warmup_epochs=kl_cfg.get("warmup_epochs", 0) if kl_cfg is not None else 0,
         )
     elif wrapper_name == "supcon":
-        losses_cfg = training_cfg["losses"]
-        reg_loss = _build_loss(losses_cfg["reg"])
-        supcon_loss = _build_loss(losses_cfg["repr"])
-        graph_encoder = _build_model(config["models"]["graph"])
-        config_encoder = _build_model(config["models"]["theta"])
-        kl_cfg = losses_cfg.get("kl")
-        kl_loss = _build_loss(kl_cfg) if kl_cfg is not None else None
-        if kl_loss is not None and not isinstance(config_encoder, ConfigVAE):
-            raise TypeError(
-                f"kl_loss requires a ConfigVAE config encoder, got {type(config_encoder).__name__}."
-            )
-        wrapper = DCBASupConWrapper(
-            graph_encoder=graph_encoder,
-            config_encoder=config_encoder,
-            optimizer_config=training_cfg["optimizer"]["args"],
-            reg_loss=reg_loss,
-            supcon_loss=supcon_loss,
-            lambda_supcon=losses_cfg["repr"].get("weight", 1.0),
-            kl_loss=kl_loss,
-            beta_kl=kl_cfg.get("beta", 1.0) if kl_cfg is not None else 1.0,
-            kl_warmup_epochs=kl_cfg.get("warmup_epochs", 0) if kl_cfg is not None else 0,
-        )
+        wrapper = build_supcon_wrapper(config)
     else:
         raise ValueError(f"Unknown wrapper '{wrapper_name}'. Available: {list(_WRAPPERS)}")
 

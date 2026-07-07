@@ -94,6 +94,17 @@ interactive filtering in the UI:
 uv run python scripts/analyse_predictions.py <entity>/dcba/<run_id> --within-k 1
 ```
 
+Embedding stability analysis (checks whether distance in raw `θ` space is preserved by the
+trained `h_G` / `h_θ` embeddings, for the gps-ae/vae-supcon runs logged to W&B):
+
+```bash
+uv run scripts/embedding_stability.py
+```
+
+Requires `wandb login` (or an existing `.netrc` entry) and the dataset directory referenced by
+each run's config (`data.dataset_root`) to already be pulled via `dvc pull` on this machine. Runs,
+W&B project, output directory, and sample size are set as constants at the top of the script.
+
 ## Model architecture
 
 ### Config encoder

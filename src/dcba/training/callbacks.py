@@ -1,5 +1,6 @@
 """Lightning callback factory."""
 
+import wandb
 from lightning.pytorch.callbacks import (
     Callback,
     EarlyStopping,
@@ -7,6 +8,33 @@ from lightning.pytorch.callbacks import (
     ModelCheckpoint,
     ModelSummary,
 )
+from lightning.pytorch.utilities.model_summary import summarize
+
+
+class WandbModelSummaryCallback(Callback):
+    """Log model summary to W&B as an HTML panel and a text artifact."""
+
+    def __init__(self, max_depth: int = -1) -> None:
+        self.max_depth = max_depth
+
+    def on_train_start(self, trainer, pl_module) -> None:
+        run = getattr(trainer.logger, "experiment", None)
+        if not isinstance(run, wandb.sdk.wandb_run.Run):
+            return
+
+        summary_str = str(summarize(pl_module, max_depth=self.max_depth))
+
+        html = (
+            "<pre style='font-family:monospace;white-space:pre;font-size:13px'>"
+            f"{summary_str}"
+            "</pre>"
+        )
+        run.log({"model/summary": wandb.Html(html)}, step=0)
+
+        artifact = wandb.Artifact(name=f"model_summary_{run.id}", type="model_summary")
+        with artifact.new_file("model_summary.txt", mode="w") as f:
+            f.write(summary_str)
+        run.log_artifact(artifact)
 
 
 def get_callbacks(config: dict) -> list[Callback]:
@@ -52,5 +80,7 @@ def get_callbacks(config: dict) -> list[Callback]:
             )
             callbacks.append(GradientAccumulationScheduler(scheduling=scheduling))
         elif name == "model_summary":
-            callbacks.append(ModelSummary(max_depth=cb.get("max_depth", -1)))
+            callbacks.append(
+                WandbModelSummaryCallback(max_depth=cb.get("max_depth", -1))
+            )
     return callbacks

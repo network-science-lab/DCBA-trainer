@@ -37,6 +37,10 @@ class ABCDDataset(Dataset):
         :class:`~dcba_data_set.graph_io.data_models.DCBAInstanceConfig` to produce the config
         representation stored in the dataset.  Defaults to
         :class:`~dcba.dataset.transforms.ABCDConfigToTensor`.
+    :param node_transform: Transform applied to each graph to populate ``data["actor"].x``.
+        Defaults to :class:`~dcba.dataset.transforms.CommunityToSize`; pass
+        :class:`~dcba.dataset.transforms.ConstantNodeFeatures` for the no-community-features
+        ablation.
     :param single_replica_per_instance: When ``True``, only the first replica of each instance
         is included.  When ``False``, all replicas are included.
     """
@@ -46,11 +50,13 @@ class ABCDDataset(Dataset):
         records: list[InstanceRecord],
         scaler: ABCDConfigScaler | None = None,
         transform: BaseTransform | None = None,
+        node_transform: BaseTransform | None = None,
         single_replica_per_instance: bool = True,
     ) -> None:
         """Initialise the dataset, eagerly converting config records to tensors."""
         super().__init__()
         _transform = transform if transform is not None else ABCDConfigToTensor()
+        self._node_transform = node_transform if node_transform is not None else CommunityToSize()
         self._items: list[tuple[ReplicaRecord, str, str, object]] = []
 
         for record in records:
@@ -68,6 +74,7 @@ class ABCDDataset(Dataset):
         dataset_root: Path,
         scaler: ABCDConfigScaler | None = None,
         transform: BaseTransform | None = None,
+        node_transform: BaseTransform | None = None,
     ) -> "ABCDDataset":
         """
         Build a dataset from a dataset directory (flat or chunked layout).
@@ -77,10 +84,17 @@ class ABCDDataset(Dataset):
         :param scaler: Optional scaler applied after the transform.
         :param transform: Transform applied to each config record.  Defaults to
             :class:`~dcba.dataset.transforms.ABCDConfigToTensor`.
+        :param node_transform: Transform applied to each graph to populate
+            ``data["actor"].x``.  Defaults to :class:`~dcba.dataset.transforms.CommunityToSize`.
 
         :returns: A :class:`ABCDDataset` constructed from all records in the dataset.
         """
-        return cls(records=load_dataset(dataset_root), scaler=scaler, transform=transform)
+        return cls(
+            records=load_dataset(dataset_root),
+            scaler=scaler,
+            transform=transform,
+            node_transform=node_transform,
+        )
 
     def __len__(self) -> int:
         """Return the number of replica entries in the dataset."""
@@ -97,6 +111,6 @@ class ABCDDataset(Dataset):
         """
         replica, instance_id, net_type, c = self._items[idx]
         g = DCBAHeteroData.from_replica_record(replica, instance_id, net_type)
-        g = CommunityToSize()(g)
+        g = self._node_transform(g)
         g.config = c
         return g
