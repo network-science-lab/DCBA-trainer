@@ -1,7 +1,6 @@
 """Per-variable regression diagnostics for a supcon test run, re-uploaded to wandb."""
 
 import argparse
-import csv
 import json
 import tempfile
 from contextlib import nullcontext
@@ -20,7 +19,7 @@ from dcba.training.metrics.plotting import residual_histogram, scatter_pred_vs_t
 
 _METRIC_COLUMNS = [
     "variable",
-    "path",
+    "mode",
     "r2",
     "pearson_r",
     "relative_error",
@@ -35,7 +34,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "run_path",
         nargs="?",
-        default="network-science-lab/DCBA/j7igczgu",
+        default="network-science-lab/DCBA/2kolqt2w",
         help="wandb run path, e.g. entity/project/run_id",
     )
     parser.add_argument(
@@ -117,11 +116,11 @@ def _reshape_predictions(
     return orig, regr, cross, keys, meta
 
 
-def _compute_metrics_rows(
+def _compute_metrics_df(
     orig: np.ndarray, regr: np.ndarray, cross: np.ndarray, keys: list[str], within_k: int
-) -> list[list]:
+) -> pd.DataFrame:
     """
-    Compute per-variable regression metrics for both prediction paths as flat table rows.
+    Compute per-variable regression metrics for both prediction paths.
 
     :param orig: ``(N, 9)`` ground-truth config values.
     :param regr: ``(N, 9)`` config-encoder self-reconstruction predictions.
@@ -129,74 +128,67 @@ def _compute_metrics_rows(
     :param keys: Variable names, in column order.
     :param within_k: Tolerance for the within-k accuracy metric.
 
-    :returns: One row per ``(variable, path)`` pair, columns as in :data:`_METRIC_COLUMNS`.
+    :returns: DataFrame with one row per ``(variable, path)`` pair, columns as in
+        :data:`_METRIC_COLUMNS`.
     """
     rows = []
-    for path_name, predictions in (("regr", regr), ("cross", cross)):
+    for mode, predictions in (("regr", regr), ("cross", cross)):
         metrics = per_variable_regression_metrics(
             orig, predictions, keys, ABCD_INT_FEATURE_INDICES, within_k
         )
         for key in keys:
             m = metrics[key]
             rows.append(
-                [
-                    key,
-                    path_name,
-                    m["r2"],
-                    m["pearson_r"],
-                    m["relative_error"],
-                    m["nrmse"],
-                    m.get("within_k_accuracy"),
-                ]
+                {
+                    "variable": key,
+                    "mode": mode,
+                    "r2": m["r2"],
+                    "pearson_r": m["pearson_r"],
+                    "relative_error": m["relative_error"],
+                    "nrmse": m["nrmse"],
+                    "within_k_accuracy": m.get("within_k_accuracy"),
+                }
             )
-    return rows
+    return pd.DataFrame(rows, columns=_METRIC_COLUMNS)
 
 
-def _print_metrics_rows(rows: list[list]) -> None:
-    """Print metrics rows as a plain-text table on stdout."""
-    header = " | ".join(_METRIC_COLUMNS)
-    print(header)
-    print("-" * len(header))
-    for row in rows:
-        print(
-            " | ".join(
-                "" if v is None else f"{v:.4g}" if isinstance(v, float) else str(v) for v in row
-            )
-        )
+def _print_metrics_df(metrics_df: pd.DataFrame) -> None:
+    """Print the metrics DataFrame as a plain-text table on stdout."""
+    print(metrics_df.to_string(index=False, na_rep=""))
 
 
-def _render_metrics_table_figure(tables: list[tuple[str, list[list]]], run_id: str) -> plt.Figure:
+def _render_metrics_table_figure(tables: list[tuple[str, pd.DataFrame]], run_id: str) -> plt.Figure:
     """
     Render one metrics table per path side by side in a single matplotlib figure.
 
-    :param tables: ``(title, rows)`` pairs, one per path, rendered left to right in order.
+    :param tables: ``(title, metrics_df)`` pairs, one per path, rendered left to right in order.
     :param run_id: wandb run id, printed as the report's title-page header.
 
     :returns: The created figure. Caller owns it and is responsible for closing it.
     """
-    max_rows = max(len(rows) for _, rows in tables)
+    max_rows = max(len(df) for _, df in tables)
     fig, axes = plt.subplots(1, len(tables), figsize=(5.5 * len(tables), 0.4 * max_rows + 3))
-    for ax, (title, rows) in zip(axes, tables, strict=True):
+    for ax, (title, df) in zip(axes, tables, strict=True):
         ax.axis("off")
         cell_text = [
-            ["" if v is None else f"{v:.4g}" if isinstance(v, float) else str(v) for v in row]
-            for row in rows
+            ["" if pd.isna(v) else f"{v:.4g}" if isinstance(v, float) else str(v) for v in row]
+            for row in df.itertuples(index=False)
         ]
         table = ax.table(
-            cellText=cell_text, colLabels=_METRIC_COLUMNS, loc="center", cellLoc="center"
+            cellText=cell_text, colLabels=list(df.columns), loc="center", cellLoc="center"
         )
         table.auto_set_font_size(False)
         table.set_fontsize(8)
-        table.auto_set_column_width(col=list(range(len(_METRIC_COLUMNS))))
+        table.auto_set_column_width(col=list(range(len(df.columns))))
         ax.set_title(title, fontweight="bold")
     fig.suptitle(f"Run ID: {run_id}", fontsize=10)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     return fig
 
 
-def _build_pdf_report(
+def build_pdf_report(
     pdf_path: Path,
-    rows: list[list],
+    metrics_df: pd.DataFrame,
     orig: np.ndarray,
     regr: np.ndarray,
     cross: np.ndarray,
@@ -210,7 +202,7 @@ def _build_pdf_report(
     vector graphics instead of being rasterised the way a per-image upload would be.
 
     :param pdf_path: Destination path for the PDF file.
-    :param rows: Metric rows, as returned by :func:`_compute_metrics_rows`.
+    :param metrics_df: Metrics, as returned by :func:`_compute_metrics_df`.
     :param orig: ``(N, 9)`` ground-truth config values.
     :param regr: ``(N, 9)`` config-encoder self-reconstruction predictions.
     :param cross: ``(N, 9)`` graph-encoder -> theta cross-modal predictions.
@@ -220,18 +212,18 @@ def _build_pdf_report(
     with PdfPages(pdf_path) as pdf:
         tables = [
             (
-                f"Per-variable regression metrics -- {path_name}",
-                [r for r in rows if r[1] == path_name],
+                f"Per-variable regression metrics -- {mode}",
+                metrics_df[metrics_df["mode"] == mode],
             )
-            for path_name in ("regr", "cross")
+            for mode in ("regr", "cross")
         ]
         table_fig = _render_metrics_table_figure(tables, run_id=run_id)
         pdf.savefig(table_fig)
         plt.close(table_fig)
 
-        for path_name, predictions in (("regr", regr), ("cross", cross)):
+        for mode, predictions in (("regr", regr), ("cross", cross)):
             for i, key in enumerate(keys):
-                label = f"{path_name}/{key}"
+                label = f"{mode}/{key}"
 
                 scatter_fig = scatter_pred_vs_true(orig[:, i], predictions[:, i], label)
                 pdf.savefig(scatter_fig)
@@ -252,8 +244,8 @@ def main() -> None:
     columns, data = _fetch_predictions_table(run)
     orig, regr, cross, keys, meta = _reshape_predictions(columns, data)
 
-    rows = _compute_metrics_rows(orig, regr, cross, keys, args.within_k)
-    _print_metrics_rows(rows)
+    metrics_df = _compute_metrics_df(orig, regr, cross, keys, args.within_k)
+    _print_metrics_df(metrics_df)
 
     report_dir_ctx = (
         nullcontext(args.dump_dir) if args.dump_dir is not None else tempfile.TemporaryDirectory()
@@ -262,15 +254,13 @@ def main() -> None:
         report_dir = Path(report_dir)
         report_dir.mkdir(parents=True, exist_ok=True)
         pdf_path = report_dir / "analysis_report.pdf"
-        _build_pdf_report(pdf_path, rows, orig, regr, cross, keys, run_id=run.id)
+        build_pdf_report(pdf_path, metrics_df, orig, regr, cross, keys, run_id=run.id)
 
-        with (report_dir / "regression_metrics.csv").open("w", encoding="utf-8", newline="") as f:
-            writer = csv.writer(f)
-            writer.writerow(_METRIC_COLUMNS)
-            writer.writerows(rows)
+        metrics_df.to_csv(report_dir / "regression_metrics.csv", index=False, encoding="utf-8")
+        metrics_df.to_latex(report_dir / "regression_metrics.tex", index=False, encoding="utf-8")
 
         with wandb.init(id=run.id, project=run.project, entity=run.entity, resume="must") as wrt_t:
-            wrt_t.log({"test/regression_metrics": wandb.Table(_METRIC_COLUMNS, rows)})
+            wrt_t.log({"test/regression_metrics": wandb.Table(dataframe=metrics_df)})
             wrt_t.save(str(pdf_path), base_path=str(report_dir), policy="now")
             wrt_t.log_artifact(
                 artifact_or_path=str(pdf_path), name=f"test-report-{run.id}", type="report"

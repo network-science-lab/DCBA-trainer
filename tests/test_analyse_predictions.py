@@ -7,7 +7,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-from analyse_predictions import _compute_metrics_rows, _reshape_predictions  # noqa: E402
+from analyse_predictions import _compute_metrics_df, _reshape_predictions  # noqa: E402
 
 
 class TestReshapePredictions:
@@ -68,7 +68,7 @@ class TestReshapePredictions:
 
 
 class TestComputeMetricsRows:
-    """Tests for _compute_metrics_rows."""
+    """Tests for _compute_metrics_df."""
 
     # Index 0 ("n") is integer-valued per ABCD_INT_FEATURE_INDICES; index 1 ("xi") is not.
     _KEYS = ["n", "xi"]
@@ -78,13 +78,13 @@ class TestComputeMetricsRows:
 
     def test_one_row_per_variable_and_path(self) -> None:
         """The rows list has len(keys) * len(paths) entries, one per (variable, path) pair."""
-        rows = _compute_metrics_rows(self._ORIG, self._REGR, self._CROSS, self._KEYS, within_k=1)
-        assert len(rows) == 4
-        assert {row[0] for row in rows} == {"n", "xi"}
-        assert {row[1] for row in rows} == {"regr", "cross"}
+        df = _compute_metrics_df(self._ORIG, self._REGR, self._CROSS, self._KEYS, within_k=1)
+        assert len(df) == 4
+        assert set(df["variable"]) == {"n", "xi"}
+        assert set(df["mode"]) == {"regr", "cross"}
 
     def test_missing_within_k_accuracy_becomes_none(self) -> None:
         """Variables outside ABCD_INT_FEATURE_INDICES get None for within_k_accuracy."""
-        rows = _compute_metrics_rows(self._ORIG, self._REGR, self._CROSS, self._KEYS, within_k=1)
-        assert all(row[-1] is None for row in rows if row[0] == "xi")
-        assert all(row[-1] is not None for row in rows if row[0] == "n")
+        df = _compute_metrics_df(self._ORIG, self._REGR, self._CROSS, self._KEYS, within_k=1)
+        assert df.loc[df["variable"] == "xi", "within_k_accuracy"].isna().all()
+        assert df.loc[df["variable"] == "n", "within_k_accuracy"].notna().all()
