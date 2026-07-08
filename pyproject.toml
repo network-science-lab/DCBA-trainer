@@ -1,6 +1,6 @@
 [project]
 name = "dcba"
-version = "0.11.0"
+version = "0.12.0"
 description = "Graph configuration retrieval: recover ABCD generator parameters from a given graph via contrastive learning."
 readme = "README.md"
 authors = [
@@ -21,6 +21,9 @@ dependencies = [
     "torch-scatter>=2.1.2",
     "torch-sparse>=0.6.18",
     "wandb>=0.25.1",
+    "numpy>=2.0.2",
+    "matplotlib>=3.11.0",
+    "pandas>=2.2.3",
 ]
 
 [dependency-groups]

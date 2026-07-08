@@ -81,6 +81,19 @@ uv run wandb sweep ./configs/base-sweep.yaml
 uv run wandb agent NAME --count X
 ```
 
+Per-variable regression diagnostics for a finished supcon test run (the aggregate `test_loss` is a
+single scalar over 9 regressed ABCD parameters, which hides which parameters the model actually
+struggles with). Fetches the `test/predictions` table logged for the run, computes per-variable
+metrics (R^2, Pearson r, relative error, NRMSE, within-k accuracy for integer parameters) for both
+the `regr` and `cross` prediction paths, and re-uploads the results to the same run: a single
+multi-page PDF report artifact (metrics table + every per-variable scatter/residual plot, kept at
+full vector resolution) plus the metrics as a `wandb.Table` under `test/regression_metrics` for
+interactive filtering in the UI:
+
+```bash
+uv run python scripts/analyse_predictions.py <entity>/dcba/<run_id> --within-k 1
+```
+
 ## Model architecture
 
 ### Config encoder
