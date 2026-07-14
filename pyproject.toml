@@ -51,10 +51,20 @@ build-backend = "uv_build"
 #   No newer release is available to upgrade to.
 # - wandb 0.25.1 bug: sentry.py uses a deprecated Scope.user setter and app_url
 #   utility from the sentry-sdk. 0.25.1 is the latest release available.
+# - juliacall warns whenever torch is imported before it; import order is fixed by
+#   dcba-data-set's own package layout, not something a caller of dcba-data-set can control.
+# - DCBABaselineWrapper deliberately has no optimiser and forces accelerator="cpu" (see
+#   dcba.wrappers.baseline), which is exactly what triggers Lightning's "no optimizer" and
+#   "GPU available but not used" advisories; the small in-memory test dataset is also why
+#   Lightning nudges to raise num_workers, which is not worth the overhead for these tests.
 filterwarnings = [
     "ignore:.*torch_geometric\\.distributed.*has been deprecated:DeprecationWarning",
     "ignore:.*`Scope\\.user`.*deprecated.*`Scope\\.set_user\\(\\)`:DeprecationWarning",
     "ignore:.*`app_url`.*setting.*Settings object:DeprecationWarning",
+    "ignore:.*torch was imported before juliacall.*:UserWarning",
+    "ignore:.*configure_optimizers.*returned .None.*:UserWarning",
+    "ignore:.*GPU available but not used.*:lightning.fabric.utilities.warnings.PossibleUserWarning",
+    "ignore:.*does not have many workers.*:lightning.fabric.utilities.warnings.PossibleUserWarning",
 ]
 addopts = "-m 'not wandb'"
 markers = ["wandb: marks tests that require a live wandb connection (deselected by default)"]

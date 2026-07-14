@@ -30,11 +30,16 @@ from dcba.training.loss import (
     ABCDConstraintPenaltyLoss,
     MultiPositiveSupConLoss,
 )
-from dcba.wrappers import DCBAAutoencoderWrapper, DCBASupConWrapper
+from dcba.wrappers import (
+    DCBAAutoencoderWrapper,
+    DCBABaselineWrapper,
+    DCBASupConWrapper,
+)
 
 _WRAPPERS = {
     "config_autoencoder": DCBAAutoencoderWrapper,
     "supcon": DCBASupConWrapper,
+    "baseline": DCBABaselineWrapper,
 }
 
 _MODELS = {
@@ -270,6 +275,8 @@ def train(config: dict) -> None:
         )
     elif wrapper_name == "supcon":
         wrapper = build_supcon_wrapper(config, scaler)
+    elif wrapper_name == "baseline":
+        wrapper = DCBABaselineWrapper(**training_cfg.get("baseline", {}))
     else:
         raise ValueError(f"Unknown wrapper '{wrapper_name}'. Available: {list(_WRAPPERS)}")
 
@@ -285,6 +292,7 @@ def train(config: dict) -> None:
         logger=logger,
         gradient_clip_val=clip_val,
         gradient_clip_algorithm="norm" if clip_val is not None else None,
+        num_sanity_val_steps=training_cfg.get("num_sanity_val_steps"),
     )
     # Optional resume: point at a Lightning checkpoint (e.g. checkpoints/last.ckpt) to restore the
     # full training state -- model weights, optimizer, epoch, global step, and callback state.
@@ -292,10 +300,12 @@ def train(config: dict) -> None:
     trainer.fit(wrapper, datamodule=datamodule, ckpt_path=ckpt_path)
     wrapper.set_scaler(datamodule.scaler)
     metrics = trainer.test(wrapper, datamodule=datamodule)
-    for i in Path(f"{config['hydra']['runtime']['output_dir']}/checkpoints").iterdir():
-        logger.experiment.log_artifact(
-            artifact_or_path=str(i),
-            name=i.stem.replace("=", "-"),
-            type="model",
-        )
+    checkpoints_dir = Path(f"{config['hydra']['runtime']['output_dir']}/checkpoints")
+    if checkpoints_dir.exists():
+        for i in checkpoints_dir.iterdir():
+            logger.experiment.log_artifact(
+                artifact_or_path=str(i),
+                name=i.stem.replace("=", "-"),
+                type="model",
+            )
     logger.log_metrics(metrics[-1])
