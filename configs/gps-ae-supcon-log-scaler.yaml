@@ -8,7 +8,12 @@ data:
   dataset_root: "abcd-big"
   transform: ABCDConfigToTensor
   scaler:
-    name: ABCDConfigScaler
+    # ABCDLogConfigScaler vs ABCDConfigScaler (used in gps-ae-supcon-output-weights.yaml) is the
+    # only intended difference between this config and that one -- keep everything else in sync
+    # so the comparison isolates the scaler change. See ABCDLogConfigScaler's docstring
+    # (dcba/dataset/transforms.py): c_max/d_min/d_max/nout are log-compressed relative to each
+    # graph's own n instead of linearly against a fixed, dataset-observed bound.
+    name: ABCDLogConfigScaler
     args:
       n_max: 10000
   val_ratio: 0.10
@@ -53,20 +58,15 @@ training:
       name: abcd_constraint
       args:
         lambda_penalty: 1.0
-        # 'raw' compares the ABCD generator's validity conditions (d_min <= d_max, c_max <= n,
-        # d_max <= n, nout <= n) in raw scale, denormalising predictions through this config's
-        # scaler. The legacy 'scaled' mode falsely penalised d_min <= d_max on 27% of valid
-        # abcd-big configs under ABCDConfigScaler's per-feature bounds (d_min /100 vs d_max
-        # /6000); older runs (e.g. 3or3wpqk) trained with that flaw, and are anyway not
-        # comparable to this config since the cluster-pool changes (num_clusters 16 -> 128,
-        # quantile readout). See .analysis/ordering-penalty-fix.md.
+        # 'raw' compares the ABCD generator's validity conditions in raw scale, denormalising
+        # predictions through this config's scaler. The legacy 'scaled' mode is wrong under
+        # ABCDLogConfigScaler (falsely fires on 14-15% of valid abcd-big configs for
+        # c_max <= n / d_max <= n). See .analysis/ordering-penalty-fix.md.
         ordering_penalties: raw
-        # weight_i = 1 + clip(regr_R2 - cross_R2, 0, 1) from the
-        # 2kolqt2w (gps-ae-supcon) baseline's test/regression_metrics table, in ABCD_CONFIG_KEYS
-        # order [n, t1, t2, xi, c_min, c_max, d_min, d_max, nout]. Biggest boost on t2 (largest
-        # regr->cross gap, 0.96) and c_max (0.44); n/t1/c_min/nout/d_max stay close to 1.0 since
-        # their gap was small (their old bad *absolute* R2 was a scaler problem, already fixed
-        # separately -- see scripts/check_config_scaling.py -- not re-litigated here).
+        # Same weights as gps-ae-supcon-output-weights.yaml -- kept fixed so this run isolates the
+        # scaler change. Re-derive with scripts/derive_output_weights.py against this run's own
+        # regression_metrics table once trained, rather than reusing weights measured under the
+        # other scaler.
         weights: [1.028, 1.068, 1.959, 1.320, 1.034, 1.435, 1.473, 1.138, 1.029]
     repr:
       name: supcon
@@ -82,9 +82,18 @@ training:
       weight_decay: 0.00001
   logger:
     project: dcba
-    name: gps-ae-supcon-cluster-pool
+    name: gps-ae-supcon-log-scaler
     tags:
-      [gps, community-features, abcd-constraint, bidirectional, batch64, cluster-pool, reweighted]
+      [
+        gps,
+        community-features,
+        abcd-constraint,
+        bidirectional,
+        batch64,
+        cluster-pool,
+        reweighted,
+        log-scaler,
+      ]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss

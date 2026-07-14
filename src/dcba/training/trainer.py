@@ -11,6 +11,8 @@ from dcba.dataset import (
     ABCDConfigScaler,
     ABCDConfigSchema,
     ABCDConfigToTensor,
+    ABCDLogConfigScaler,
+    ABCDRelativeConfigScaler,
     CommunityToSize,
     ConstantNodeFeatures,
 )
@@ -48,6 +50,8 @@ _LOSSES: dict[str, type[nn.Module]] = {
 
 _SCALERS: dict[str, type] = {
     "ABCDConfigScaler": ABCDConfigScaler,
+    "ABCDLogConfigScaler": ABCDLogConfigScaler,
+    "ABCDRelativeConfigScaler": ABCDRelativeConfigScaler,
 }
 
 _TRANSFORMS: dict[str, type[BaseTransform]] = {
@@ -152,6 +156,27 @@ def _build_loss(loss_cfg: dict) -> nn.Module:
     return _LOSSES[name](**loss_cfg.get("args", {}))
 
 
+def _attach_ordering_scaler(loss: nn.Module, config: dict) -> None:
+    """
+    Attach the data pipeline's scaler to a constraint loss that compares orderings in raw scale.
+
+    No-op unless ``loss`` is an :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss` with
+    ``ordering_penalties="raw"`` -- that mode denormalises predictions through the same scaler
+    the datamodule uses (see the loss docstring), so the two must be built from the same config.
+
+    :param loss: The regression loss instance built by :func:`_build_loss`.
+    :param config: Full resolved training config dict.
+    """
+    if isinstance(loss, ABCDConstraintPenaltyLoss) and loss.ordering_mode == "raw":
+        scaler = _build_scaler(config["data"].get("scaler"))
+        if scaler is None:
+            raise ValueError(
+                "ordering_penalties='raw' requires data.scaler to be set -- the loss "
+                "denormalises predictions through the same scaler the datamodule uses."
+            )
+        loss.set_scaler(scaler)
+
+
 def build_supcon_wrapper(config: dict) -> DCBASupConWrapper:
     """
     Build an untrained :class:`~dcba.wrappers.supcon.DCBASupConWrapper` from a resolved config.
@@ -169,6 +194,7 @@ def build_supcon_wrapper(config: dict) -> DCBASupConWrapper:
     training_cfg = config["training"]
     losses_cfg = training_cfg["losses"]
     reg_loss = _build_loss(losses_cfg["reg"])
+    _attach_ordering_scaler(reg_loss, config)
     supcon_loss = _build_loss(losses_cfg["repr"])
     graph_encoder = _build_model(config["models"]["graph"])
     config_encoder = _build_model(config["models"]["theta"])
@@ -229,6 +255,7 @@ def train(config: dict) -> None:
         losses_cfg = training_cfg["losses"]
         encoder = _build_model(next(iter(config["models"].values())))
         loss_fn = _build_loss(losses_cfg["reg"])
+        _attach_ordering_scaler(loss_fn, config)
         kl_cfg = losses_cfg.get("kl")
         kl_loss = _build_loss(kl_cfg) if kl_cfg is not None else None
         if kl_loss is not None and not isinstance(encoder, ConfigVAE):

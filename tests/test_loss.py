@@ -573,3 +573,129 @@ class TestABCDConstraintPenaltyLoss:
         loss_low = ABCDConstraintPenaltyLoss(lambda_penalty=0.1)(x, target)
         loss_high = ABCDConstraintPenaltyLoss(lambda_penalty=10.0)(x, target)
         assert loss_high.item() > loss_low.item()
+
+    def test_ordering_penalties_flag_disables_ordering_terms(self) -> None:
+        """With ordering_penalties=False an ordering violation adds no penalty."""
+        x = self._make_valid()
+        x[:, 6] = 0.9  # d_min (0.9) > d_max (0.3): only an ordering violation, range still ok
+        target = x.clone()  # zero MSE so any nonzero loss must come from penalties
+        loss_off = ABCDConstraintPenaltyLoss(ordering_penalties=False)(x, target)
+        loss_on = ABCDConstraintPenaltyLoss(ordering_penalties=True)(x, target)
+        assert loss_off.item() == 0.0
+        assert loss_on.item() > 0.0
+
+    def test_ordering_penalties_flag_keeps_range_penalty(self) -> None:
+        """ordering_penalties=False must not disable the [0, 1] range penalty."""
+        x = self._make_valid()
+        x[:, 7] = 1.5  # above-range violation, covers orderings under the relative scaler
+        target = x.clone()
+        loss = ABCDConstraintPenaltyLoss(ordering_penalties=False)(x, target)
+        assert loss.item() > 0.0
+
+    def test_relative_scaled_valid_configs_get_zero_penalty_without_ordering_terms(self) -> None:
+        """Valid raw configs scaled by ABCDRelativeConfigScaler carry no penalty when
+        ordering_penalties=False -- while the default (True) falsely penalises them, since that
+        scaler's features live on incomparable scales (the reason the flag exists).
+        """
+        from dcba.dataset.transforms import ABCDRelativeConfigScaler
+
+        raw = torch.tensor(
+            [
+                # constraint-respecting configs where log(d_min)/log(d_max) > d_max/n
+                [5000.0, 2.5, 1.8, 0.3, 20.0, 300.0, 2.0, 50.0, 15.0],
+                [8000.0, 2.2, 1.5, 0.1, 5.0, 900.0, 3.0, 80.0, 200.0],
+            ]
+        )
+        scaled = ABCDRelativeConfigScaler(n_max=10_000).transform(raw)
+        loss_off = ABCDConstraintPenaltyLoss(ordering_penalties=False)(scaled, scaled)
+        loss_on = ABCDConstraintPenaltyLoss(ordering_penalties=True)(scaled, scaled)
+        assert loss_off.item() == 0.0
+        assert loss_on.item() > 0.0
+
+    def test_ordering_penalties_rejects_unknown_mode(self) -> None:
+        """A typo'd mode string must fail fast at construction, not silently at forward time."""
+        import pytest
+
+        with pytest.raises(ValueError):
+            ABCDConstraintPenaltyLoss(ordering_penalties="rawr")
+
+    def test_raw_mode_requires_scaler(self) -> None:
+        """ordering_penalties='raw' without an attached scaler must raise at forward time."""
+        import pytest
+
+        loss_fn = ABCDConstraintPenaltyLoss(ordering_penalties="raw")
+        x = self._make_valid()
+        with pytest.raises(RuntimeError):
+            loss_fn(x, x)
+
+
+class TestABCDConstraintPenaltyLossRawMode:
+    """Raw-space ordering penalties (`ordering_penalties='raw'`) under both scalers."""
+
+    def _loss_with(self, scaler) -> ABCDConstraintPenaltyLoss:
+        loss_fn = ABCDConstraintPenaltyLoss(ordering_penalties="raw")
+        loss_fn.set_scaler(scaler)
+        return loss_fn
+
+    def _valid_raw(self) -> torch.Tensor:
+        """Constraint-respecting raw configs, including the shape that broke the scaled mode."""
+        return torch.tensor(
+            [
+                # d_min=20 > d_max/60: falsely penalised by scaled mode under ABCDConfigScaler
+                [5000.0, 2.5, 1.8, 0.3, 20.0, 300.0, 20.0, 500.0, 15.0],
+                [8000.0, 2.2, 1.5, 0.1, 5.0, 900.0, 3.0, 80.0, 200.0],
+            ]
+        )
+
+    def test_no_false_penalty_on_valid_configs_any_scaler(self) -> None:
+        """Regression test: valid configs yield zero penalty in raw mode under both scalers --
+        the exact configuration that the legacy scaled mode falsely penalises.
+        """
+        from dcba.dataset.transforms import ABCDConfigScaler, ABCDRelativeConfigScaler
+
+        raw = self._valid_raw()
+        for scaler_cls in (ABCDConfigScaler, ABCDRelativeConfigScaler):
+            scaler = scaler_cls(n_max=10_000)
+            scaled = scaler.transform(raw)
+            loss = self._loss_with(scaler)(scaled, scaled)
+            assert loss.item() == 0.0, scaler_cls.__name__
+
+        # sanity: the legacy scaled mode DOES falsely fire on the same configs
+        scaler = ABCDConfigScaler(n_max=10_000)
+        scaled = scaler.transform(raw)
+        legacy = ABCDConstraintPenaltyLoss(ordering_penalties="scaled")(scaled, scaled)
+        assert legacy.item() > 0.0
+
+    def test_genuine_violation_is_penalised(self) -> None:
+        """A prediction that decodes to raw d_min > d_max must be penalised in raw mode."""
+        from dcba.dataset.transforms import ABCDConfigScaler
+
+        scaler = ABCDConfigScaler(n_max=10_000)
+        violating_raw = self._valid_raw()
+        violating_raw[:, 6] = 600.0  # d_min 600 > d_max 500/80: genuine constraint violation
+        scaled = scaler.transform(violating_raw)
+        loss = self._loss_with(scaler)(scaled, scaled)
+        assert loss.item() > 0.0
+
+    def test_penalty_magnitude_is_order_one(self) -> None:
+        """Violations are normalised by raw n, so the hinge cannot blow up with graph size."""
+        from dcba.dataset.transforms import ABCDConfigScaler
+
+        scaler = ABCDConfigScaler(n_max=10_000)
+        violating_raw = self._valid_raw()
+        violating_raw[:, 7] = 9_000.0  # d_max far above n=5000/8000
+        scaled = scaler.transform(violating_raw)
+        loss = self._loss_with(scaler)(scaled, scaled)
+        assert 0.0 < loss.item() < 10.0
+
+    def test_raw_mode_gradient_flows(self) -> None:
+        """Gradients must flow through denormalise back to the prediction."""
+        from dcba.dataset.transforms import ABCDRelativeConfigScaler
+
+        scaler = ABCDRelativeConfigScaler(n_max=10_000)
+        scaled = scaler.transform(self._valid_raw())
+        x_hat = scaled.clone().requires_grad_(True)
+        loss = self._loss_with(scaler)(x_hat, scaled)
+        loss.backward()
+        assert x_hat.grad is not None
+        assert torch.isfinite(x_hat.grad).all()

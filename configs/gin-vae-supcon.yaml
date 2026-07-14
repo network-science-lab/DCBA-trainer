@@ -39,6 +39,10 @@ training:
       name: abcd_constraint
       args:
         lambda_penalty: 1.0
+        # 'raw' checks the ABCD generator validity conditions in raw scale (denormalised via
+        # this config's scaler); the legacy 'scaled' default falsely penalises d_min <= d_max
+        # on 27% of valid abcd-big configs -- see .analysis/ordering-penalty-fix.md.
+        ordering_penalties: raw
     repr:
       name: supcon
       weight: 0.3

@@ -1,34 +1,65 @@
 """Constraint-penalty augmented MSE loss for ABCD config reconstruction."""
 
+from typing import Protocol
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
+
+#: Valid values for ``ABCDConstraintPenaltyLoss``'s ``ordering_penalties`` argument, after bool
+#: normalisation (``True -> "scaled"``, ``False -> "none"``).
+_ORDERING_MODES: tuple[str, ...] = ("scaled", "raw", "none")
+
+
+class _DenormalisingScaler(Protocol):
+    """Anything with a differentiable ``denormalise`` mapping scaled configs to raw scale."""
+
+    def denormalise(self, x: Tensor) -> Tensor:
+        """Map a normalised ``(..., 9)`` config tensor back to raw scale, without rounding."""
+        ...
 
 
 class ABCDConstraintPenaltyLoss(nn.Module):
     """
     MSE reconstruction loss augmented with squared-hinge penalties for ABCD config constraints.
 
-    All arithmetic operates in normalised space (values expected in ``[0, 1]``), matching the
-    model's output domain.  The total loss is::
+    The total loss is::
 
         weighted_MSE(x_hat, target) + lambda * sum(relu(violation)^2)
 
-    Per-feature range penalties ensure every predicted feature stays within ``[0, 1]``.
-    Cross-parameter ordering penalties enforce the structural ABCD constraints:
+    Per-feature range penalties ensure every predicted feature stays within ``[0, 1]``
+    (normalised space). Cross-parameter ordering penalties enforce the structural constraints
+    the ABCD generator requires to run at all:
 
     - ``d_min <= d_max``
     - ``c_max <= n``
     - ``d_max <= n``
     - ``nout <= n``
 
+    ``ordering_penalties`` selects how (and whether) the ordering penalties are computed:
+
+    - ``"raw"`` (recommended): comparisons happen in **raw scale**, obtained by passing ``x_hat``
+      through the scaler's differentiable :meth:`denormalise` (attach the scaler with
+      :meth:`set_scaler`; the training entry point does this automatically). Each violation is
+      divided by the same sample's raw ``n``, so the hinge is dimensionless and O(1) regardless
+      of graph size. Correct under any scaler.
+    - ``"scaled"`` (legacy, default; also accepts ``True``): comparisons happen on the scaled
+      values directly. Only meaningful when the compared features share one scaling map. Under
+      :class:`~dcba.dataset.transforms.ABCDConfigScaler`'s per-feature bounds the
+      ``d_min <= d_max`` term actually enforces ``d_min <= d_max / 60`` and falsely fires on 27%
+      of valid ``abcd-big`` configs -- kept as the default only for comparability with
+      already-trained runs (see ``.analysis/ordering-penalty-fix.md``); prefer ``"raw"`` for new
+      experiments.
+    - ``"none"`` (also accepts ``False``): ordering penalties disabled; the ``[0, 1]`` range
+      penalty stays. Sufficient on its own under
+      :class:`~dcba.dataset.transforms.ABCDRelativeConfigScaler`, where every ordering is
+      equivalent to ``scaled <= 1`` by construction.
+
     .. note::
-        ``c_min <= c_max`` is deliberately not enforced here: :class:`ABCDConfigScaler` scales
-        ``c_min`` as ``c_min / c_max`` rather than against a fixed bound (see its docstring), so
-        the ordering is already guaranteed by construction wherever this loss's inputs come from
-        that scaler -- an explicit penalty on ``x_hat[:, 4] <= x_hat[:, 5]`` here would be
-        comparing a ratio against an absolute count, not enforcing anything meaningful.
+        ``c_min <= c_max`` is deliberately not enforced here: every scaler expresses ``c_min`` as
+        ``c_min / c_max`` (see :class:`~dcba.dataset.transforms.ABCDConfigScaler`), so the
+        ordering is guaranteed by construction together with the range penalty.
 
     .. note::
         ``n`` (index 0) is exempt from the above-range penalty (``> 1`` in normalised space)
@@ -43,15 +74,78 @@ class ABCDConstraintPenaltyLoss(nn.Module):
         parameters with a large graph-encoder ``regr -> cross`` R2 gap more gradient priority
         (see ``GNN_ENCODER_IDEAS.md``, idea 7). ``None`` (default) weights every feature equally,
         identical to plain MSE.
+    :param ordering_penalties: ``"raw"``, ``"scaled"`` or ``"none"`` -- see above. Booleans are
+        accepted for backwards compatibility (``True -> "scaled"``, ``False -> "none"``).
     """
 
-    def __init__(self, lambda_penalty: float = 1.0, weights: list[float] | None = None) -> None:
+    def __init__(
+        self,
+        lambda_penalty: float = 1.0,
+        weights: list[float] | None = None,
+        ordering_penalties: bool | str = True,
+    ) -> None:
         """Initialise the loss with the given penalty weight and optional per-feature weights."""
         super().__init__()
         self.lambda_penalty = lambda_penalty
+        if isinstance(ordering_penalties, bool):
+            ordering_penalties = "scaled" if ordering_penalties else "none"
+        if ordering_penalties not in _ORDERING_MODES:
+            raise ValueError(
+                f"ordering_penalties must be one of {_ORDERING_MODES} (or a bool), "
+                f"got {ordering_penalties!r}."
+            )
+        self.ordering_mode = ordering_penalties
+        self._scaler: _DenormalisingScaler | None = None
         self.register_buffer(
             "_weights", None if weights is None else torch.tensor(weights, dtype=torch.float32)
         )
+
+    def set_scaler(self, scaler: _DenormalisingScaler | None) -> None:
+        """
+        Attach the scaler whose :meth:`denormalise` maps ``x_hat`` to raw scale.
+
+        Required before the first forward pass when ``ordering_penalties="raw"``; ignored
+        otherwise. Kept out of the constructor so config-driven construction
+        (``_build_loss(args)``) stays purely declarative -- the training entry point attaches
+        the data pipeline's scaler after both are built.
+
+        :param scaler: Scaler providing a differentiable ``denormalise``, or ``None`` to detach.
+        """
+        self._scaler = scaler
+
+    def _ordering_penalty(self, x_hat: Tensor) -> Tensor:
+        """
+        Compute the mean squared-hinge ordering penalty for ``x_hat`` per :attr:`ordering_mode`.
+
+        :param x_hat: Reconstructed normalised config tensor of shape ``(batch, 9)``.
+
+        :returns: Scalar penalty tensor (``0`` when the mode is ``"none"``).
+        """
+        if self.ordering_mode == "none":
+            return x_hat.new_zeros(())
+
+        if self.ordering_mode == "raw":
+            if self._scaler is None:
+                raise RuntimeError(
+                    "ordering_penalties='raw' requires a scaler; call set_scaler() first."
+                )
+            values = self._scaler.denormalise(x_hat)
+            # Dimensionless O(1) violations: a raw-count gap of e.g. 300 means something very
+            # different at n=500 vs n=10000, and an unnormalised hinge would dwarf the MSE term.
+            scale = values[:, 0].clamp(min=1.0)
+        else:
+            values = x_hat
+            scale = x_hat.new_ones(x_hat.shape[0])
+
+        # d_min (idx 6) <= d_max (idx 7)
+        d_order = F.relu((values[:, 6] - values[:, 7]) / scale) ** 2
+        # c_max (idx 5) <= n (idx 0)
+        c_max_n = F.relu((values[:, 5] - values[:, 0]) / scale) ** 2
+        # d_max (idx 7) <= n (idx 0)
+        d_max_n = F.relu((values[:, 7] - values[:, 0]) / scale) ** 2
+        # nout (idx 8) <= n (idx 0)
+        nout_n = F.relu((values[:, 8] - values[:, 0]) / scale) ** 2
+        return (d_order + c_max_n + d_max_n + nout_n).mean()
 
     def forward(self, x_hat: Tensor, target: Tensor) -> Tensor:
         """
@@ -74,17 +168,5 @@ class ABCDConstraintPenaltyLoss(nn.Module):
         above = F.relu(x_hat[:, 1:] - 1.0)  # features 1-8 only
         range_penalty = (below**2).sum(dim=1).mean() + (above**2).sum(dim=1).mean()
 
-        # Cross-parameter ordering constraints (c_min <= c_max excluded -- see class docstring)
-        # d_min (idx 6) <= d_max (idx 7)
-        d_order = F.relu(x_hat[:, 6] - x_hat[:, 7]) ** 2
-        # c_max (idx 5) <= n (idx 0)
-        c_max_n = F.relu(x_hat[:, 5] - x_hat[:, 0]) ** 2
-        # d_max (idx 7) <= n (idx 0)
-        d_max_n = F.relu(x_hat[:, 7] - x_hat[:, 0]) ** 2
-        # nout (idx 8) <= n (idx 0)
-        nout_n = F.relu(x_hat[:, 8] - x_hat[:, 0]) ** 2
-
-        ordering_penalty = (d_order + c_max_n + d_max_n + nout_n).mean()
-
-        penalty = range_penalty + ordering_penalty
+        penalty = range_penalty + self._ordering_penalty(x_hat)
         return mse + self.lambda_penalty * penalty
