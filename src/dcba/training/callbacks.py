@@ -6,7 +6,6 @@ from lightning.pytorch.callbacks import (
     EarlyStopping,
     GradientAccumulationScheduler,
     ModelCheckpoint,
-    ModelSummary,
 )
 from lightning.pytorch.utilities.model_summary import summarize
 
@@ -15,9 +14,11 @@ class WandbModelSummaryCallback(Callback):
     """Log model summary to W&B as an HTML panel and a text artifact."""
 
     def __init__(self, max_depth: int = -1) -> None:
+        """:param max_depth: Depth passed to Lightning's ``summarize`` (``-1`` for all layers)."""
         self.max_depth = max_depth
 
     def on_train_start(self, trainer, pl_module) -> None:
+        """Log the model summary once, at train start, when the logger is a W&B run."""
         run = getattr(trainer.logger, "experiment", None)
         if not isinstance(run, wandb.sdk.wandb_run.Run):
             return

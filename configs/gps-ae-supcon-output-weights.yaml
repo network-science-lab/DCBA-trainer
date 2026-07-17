@@ -7,6 +7,8 @@ random_seed: 42
 data:
   dataset_root: "abcd-big"
   transform: ABCDConfigToTensor
+  # No community features (ablation): constant node features, pure graph structure.
+  node_transform: ConstantNodeFeatures
   scaler:
     name: ABCDConfigScaler
     args:
@@ -27,15 +29,15 @@ models:
     output_dim: 9
     dropout: 0.1
     attn_dropout: 0.1
-    # GNN_ENCODER_IDEAS.md idea 3: learned soft-clustering pool, no ground-truth community labels
-    # used -- see GPSEncoder docstring / gps_encoder.py. num_clusters is a budget the model can
-    # under-use (usage-entropy aux loss lets it discover how many of these a graph actually
-    # needs), not a claim that every ABCD graph has exactly this many communities -- set well
-    # above the largest community count you expect to see, not at a "typical" value.
+    # Learned soft-clustering pool (see GPSEncoder docstring). num_clusters is a budget the model
+    # can under-use, not a per-graph community count -- set well above the largest expected count.
     num_clusters: 128
-    # Quantile levels read off the per-slot soft cluster sizes in GPSEncoder._cluster_pool,
+    # Quantile levels read off the per-slot soft cluster sizes (see GPSEncoder._cluster_pool).
     cluster_size_quantiles:
       [0.01, 0.05, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 0.95, 0.99]
+    # Disable the usage-entropy aux term: its minimum is all mass on a single slot, which
+    # collapses the cluster-size distribution the quantiles above read. Per-node entropy stays.
+    usage_entropy_weight: 0.0
   theta:
     cls: ConfigAutoEncoder
     input_dim: 9
@@ -47,7 +49,10 @@ training:
   accelerator: gpu
   devices: [0]
   max_epochs: 200
-  aux_weight: 0.1 # weight on the cluster-assignment entropy loss (idea 3)
+  # SupCon (temperature 0.07) produces occasional hard-batch gradient spikes; clip identically
+  # across scaler-comparison runs so the cap is not a confound.
+  gradient_clip_val: 1.0
+  aux_weight: 0.1 # weight on the cluster-assignment entropy loss
   losses:
     reg:
       name: abcd_constraint
@@ -55,18 +60,10 @@ training:
         lambda_penalty: 1.0
         # 'raw' compares the ABCD generator's validity conditions (d_min <= d_max, c_max <= n,
         # d_max <= n, nout <= n) in raw scale, denormalising predictions through this config's
-        # scaler. The legacy 'scaled' mode falsely penalised d_min <= d_max on 27% of valid
-        # abcd-big configs under ABCDConfigScaler's per-feature bounds (d_min /100 vs d_max
-        # /6000); older runs (e.g. 3or3wpqk) trained with that flaw, and are anyway not
-        # comparable to this config since the cluster-pool changes (num_clusters 16 -> 128,
-        # quantile readout). See .analysis/ordering-penalty-fix.md.
+        # scaler; the legacy 'scaled' mode misfires on valid configs (see the loss docstring).
         ordering_penalties: raw
-        # weight_i = 1 + clip(regr_R2 - cross_R2, 0, 1) from the
-        # 2kolqt2w (gps-ae-supcon) baseline's test/regression_metrics table, in ABCD_CONFIG_KEYS
-        # order [n, t1, t2, xi, c_min, c_max, d_min, d_max, nout]. Biggest boost on t2 (largest
-        # regr->cross gap, 0.96) and c_max (0.44); n/t1/c_min/nout/d_max stay close to 1.0 since
-        # their gap was small (their old bad *absolute* R2 was a scaler problem, already fixed
-        # separately -- see scripts/check_config_scaling.py -- not re-litigated here).
+        # weight_i = 1 + clip(regr_R2 - cross_R2, 0, 1) in ABCD_CONFIG_KEYS order, derived from
+        # the gps-ae-supcon baseline's regression_metrics via scripts/derive_output_weights.py.
         weights: [1.028, 1.068, 1.959, 1.320, 1.034, 1.435, 1.473, 1.138, 1.029]
     repr:
       name: supcon
@@ -84,7 +81,7 @@ training:
     project: dcba
     name: gps-ae-supcon-cluster-pool
     tags:
-      [gps, community-features, abcd-constraint, bidirectional, batch64, cluster-pool, reweighted]
+      [gps, no-community-features, abcd-constraint, bidirectional, batch64, cluster-pool, reweighted]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss

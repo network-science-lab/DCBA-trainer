@@ -699,3 +699,45 @@ class TestABCDConstraintPenaltyLossRawMode:
         loss.backward()
         assert x_hat.grad is not None
         assert torch.isfinite(x_hat.grad).all()
+
+    def test_init_like_predictions_bounded_penalty(self) -> None:
+        """Random init-like predictions must not explode the penalty under any scaler.
+
+        Regression test for the observed failure: normalising by the *predicted* raw n let the
+        denominator collapse to 1 under ABCDConfigScaler while c_max/d_max denormalised to
+        thousands, producing train losses of ~1e4-1e5 at the start of real runs.
+        """
+        from dcba.dataset.transforms import (
+            ABCDConfigScaler,
+            ABCDLogConfigScaler,
+            ABCDRelativeConfigScaler,
+        )
+
+        torch.manual_seed(0)
+        x_hat = torch.randn(64, 9) * 0.3  # init-like: small, partly negative
+        target = ABCDConfigScaler(n_max=10_000).transform(self._valid_raw()).repeat(32, 1)
+        for scaler_cls in (ABCDConfigScaler, ABCDLogConfigScaler, ABCDRelativeConfigScaler):
+            scaler = scaler_cls(n_max=10_000)
+            target = scaler.transform(self._valid_raw()).repeat(32, 1)
+            loss = self._loss_with(scaler)(x_hat, target)
+            assert loss.item() < 100.0, f"{scaler_cls.__name__}: {loss.item()}"
+
+    def test_violation_gradient_points_the_right_way(self) -> None:
+        """Increasing a violating c_max must increase the penalty (gradient sign check).
+
+        Regression test for the relative-violation normalisation, whose gradient pointed the
+        wrong way when the violator was its own denominator with a negative co-operand
+        (predicted n < 0 at init under ABCDConfigScaler).
+        """
+        from dcba.dataset.transforms import ABCDConfigScaler
+
+        scaler = ABCDConfigScaler(n_max=10_000)
+        target = scaler.transform(self._valid_raw())
+        x_hat = target.clone()
+        x_hat[:, 0] = -0.05  # predicted n denormalises negative
+        x_hat[:, 5] = 0.5  # c_max_raw ~ 3000 >> n_raw: genuine violation
+        x_hat.requires_grad_(True)
+        loss = self._loss_with(scaler)(x_hat, target)
+        loss.backward()
+        # d loss / d c_max must be positive: lowering c_max must lower the penalty.
+        assert (x_hat.grad[:, 5] > 0).all()

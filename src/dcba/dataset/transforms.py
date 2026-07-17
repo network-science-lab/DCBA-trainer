@@ -39,37 +39,27 @@ def abcd_param_bounds(n_max: int = 10_000) -> dict[str, tuple[float, float]]:
     """
     Return per-feature ``(lo, hi)`` bounds for ABCD config normalisation.
 
-    Bounds are derived from ABCDGraphGenerator.jl hard constraints (``src/pl_sampler.jl``,
-    ``src/community_sampler.jl``, ``src/graph_sampler.jl``) and the observed dynamic range of each
-    parameter on the ``abcd-big`` dataset (see ``scripts/check_config_scaling.py``).
+    Bounds combine ABCDGraphGenerator.jl hard constraints (``t1``, ``t2`` >= 1; ``xi`` in
+    ``[0, 1]``) with per-feature maxima observed on ``abcd-big``. Each size-like feature gets its
+    own bound rather than a shared ``n_max``, so none is starved into a sliver of ``[0, 1]``.
+    ``c_min`` is bounded ``[0, 1]`` because :class:`ABCDConfigScaler` scales it as a fraction of
+    ``c_max``, not as an absolute count.
 
-    Sharing one ``n_max``-sized bound across every feature analytically bounded by ``n``
-    (``c_min, c_max, d_min, d_max, nout``) left most of them using under 5% of their scaled
-    ``[0, 1]`` range in practice (``d_min``: 0.1%), starving any loss computed on the scaled config
-    of gradient for those features regardless of encoder architecture. Each now has its own bound,
-    set from the observed max on ``abcd-big`` with roughly a 20-40% safety margin for unseen data:
-        - ``t1``, ``t2``: ``@assert α >= 1`` (pl_sampler.jl); upper ~5 in practice.
-        - ``xi``: ``0 ≤ ξ ≤ 1`` (hard constraint, graph_sampler.jl).
-        - ``c_min``: expressed as a fraction of ``c_max`` by :class:`ABCDConfigScaler` instead of
-          against a fixed bound, since ``c_min <= c_max`` is itself a hard constraint -- a fixed
-          bound left it starved (1.1%) no matter how tight it was made, because it is fundamentally
-          relative to another feature, not to ``n``.
-
-    :param n_max: Maximum graph size in the dataset; only used for ``n`` itself now (see above).
+    :param n_max: Maximum graph size in the dataset; used only for the ``n`` bound.
 
     :returns: Dict mapping each key in :data:`ABCD_CONFIG_KEYS` to ``(lo, hi)``.
     """
     n = float(n_max)
     return {
-        "n": (1.0, n),  # @assert n > 0; example: n = 10_000; observed max 9998 on abcd-big
-        "t1": (1.0, 5.0),  # @assert α >= 1; power-law exponents rarely exceed 5
-        "t2": (1.0, 5.0),  # @assert α >= 1; power-law exponents rarely exceed 5
+        "n": (1.0, n),  # @assert n > 0
+        "t1": (1.0, 5.0),  # @assert α >= 1
+        "t2": (1.0, 5.0),  # @assert α >= 1
         "xi": (0.0, 1.0),  # 0 ≤ ξ ≤ 1 (hard constraint)
-        "c_min": (0.0, 1.0),  # fraction of c_max, not an absolute count -- see ABCDConfigScaler
-        "c_max": (1.0, 6_000.0),  # observed max 4938 on abcd-big
-        "d_min": (1.0, 100.0),  # observed max 50 on abcd-big
-        "d_max": (1.0, 6_000.0),  # observed max 4993 on abcd-big
-        "nout": (0.0, 700.0),  # observed max 492 on abcd-big
+        "c_min": (0.0, 1.0),  # fraction of c_max -- see ABCDConfigScaler
+        "c_max": (1.0, 6_000.0),  # observed max ~4938 on abcd-big
+        "d_min": (1.0, 100.0),  # observed max ~50 on abcd-big
+        "d_max": (1.0, 6_000.0),  # observed max ~4993 on abcd-big
+        "nout": (0.0, 700.0),  # observed max ~492 on abcd-big
     }
 
 
@@ -150,8 +140,7 @@ class ABCDConfigScaler:
         return self.transform(x)
 
 
-#: Features scaled relative to each graph's own `n` (see :class:`ABCDLogConfigScaler`), rather
-#: than a fixed bound -- all four are order-statistic-like and can range from ~1 up to `n` itself.
+#: Size-like features scaled as ``log1p(x) / log1p(n)`` by :class:`ABCDLogConfigScaler`.
 _LOG_N_RELATIVE_KEYS: tuple[str, ...] = ("c_max", "d_min", "d_max", "nout")
 
 
@@ -159,45 +148,20 @@ class ABCDLogConfigScaler:
     """
     Normalise ABCD config tensors to ``[0, 1]``, log-compressing size-like features against `n`.
 
-    :class:`ABCDConfigScaler` maps ``c_max``, ``d_min``, ``d_max`` and ``nout`` linearly against a
-    fixed bound measured once on a specific dataset (see :func:`abcd_param_bounds`). Two problems
-    with that: the bound is a hardcoded constant that silently goes stale on any other dataset or
-    `n_max`, and a linear map of a heavy-tailed quantity leaves most graphs -- whose values are
-    typically a small fraction of the bound -- compressed into a sliver of ``[0, 1]``
-    (``scripts/check_config_scaling.py``'s "starved parameter" problem), even after widening the
-    bound to the observed max.
+    Maps ``c_max``, ``d_min``, ``d_max`` and ``nout`` as ``log1p(x) / log1p(n)`` -- relative to
+    each graph's own `n` rather than a fixed bound, so the map adapts to any `n` and spreads
+    heavy-tailed values across ``[0, 1]``. `n` itself is scaled as ``log1p(n) / log1p(n_max)``.
+    `t1`, `t2`, `xi` keep :class:`ABCDConfigScaler`'s linear map and `c_min` its ``c_min / c_max``
+    ratio.
 
-    This scaler instead maps those four features as ``log1p(x) / log1p(n)`` -- relative to *that
-    graph's own* `n` (read from the same config row), not a fixed constant. Values an order of
-    magnitude apart (which a linear scale barely distinguishes near zero) become roughly evenly
-    spaced in log space, and the map adapts automatically to any `n` without re-measuring bounds.
-    `n` itself has no larger per-sample reference, so it is scaled as ``log1p(n) / log1p(n_max)``
-    against the fixed dataset `n_max` instead.
+    The inverse is exact: :meth:`inverse_transform` denormalises `n` first (every log-relative
+    feature depends on it), then `c_max` before `c_min`.
 
-    `t1`, `t2` (already tightly bounded to ``[1, 5]``) and `xi` (already ``[0, 1]``) are not
-    heavy-tailed and are left on :class:`ABCDConfigScaler`'s existing linear map -- log-compressing
-    an already-well-used range would only add unneeded nonlinearity. `c_min` is left on its
-    existing ``c_min / c_max`` ratio (see :class:`ABCDConfigScaler`), which does not suffer from
-    the same starved-range problem (a ratio of two comparable magnitudes, already ``[0, 1]``).
-
-    The inverse is exact, in the same spirit as :class:`ABCDConfigScaler`: recovering any
-    log-relative feature requires `n` to already be in raw scale, so :meth:`inverse_transform`
-    denormalises `n` first, exactly as :class:`ABCDConfigScaler` denormalises `c_max` before
-    `c_min`.
-
-    :param n_max: Maximum graph size in the dataset, used only to scale `n` itself. Defaults to
-        10 000, matching :class:`ABCDConfigScaler`.
+    :param n_max: Maximum graph size in the dataset, used only to scale `n`. Defaults to 10 000.
     """
 
     def __init__(self, n_max: int = 10_000) -> None:
-        """Initialise the scaler, precomputing index/bound tensors for vectorised (..., 9) ops.
-
-        No per-feature Python loop runs in :meth:`transform`/:meth:`inverse_transform` -- every
-        group of features is gathered/scattered in one indexed tensor op, same as
-        :class:`ABCDConfigScaler`, so this scales the same way regardless of whether it is called
-        once per ``(9,)`` config row (as :class:`~dcba.dataset.ABCDDataset` does) or once per
-        ``(N, 9)`` batch.
-        """
+        """Initialise the scaler, caching feature indices and the linear bounds it still uses."""
         self._n_max = float(n_max)
         self._log_n_max = math.log1p(self._n_max)
         bounds = abcd_param_bounds(n_max)
@@ -285,46 +249,22 @@ class ABCDLogConfigScaler:
 
 class ABCDRelativeConfigScaler:
     """
-    Normalise ABCD config tensors to ``[0, 1]`` using only hard-constraint anchors, with no
-    dataset-estimated bounds on the size-like features.
+    Normalise ABCD config tensors to ``[0, 1]`` using hard-constraint anchors readable from any
+    graph, with no dataset-estimated bounds on the size-like features.
 
-    :class:`ABCDConfigScaler` scales ``c_max``, ``d_max``, ``d_min`` and ``nout`` against fixed
-    absolute bounds measured once on ``abcd-big`` (see :func:`abcd_param_bounds`). Those constants
-    silently go stale on any dataset with a different size profile, and anchor each feature to a
-    number that cannot be read off a real graph. This scaler replaces them with anchors that
-    follow directly from ABCD's hard constraints and are trivially readable from any graph
-    (`n`, `d_max`):
-
-    - ``c_max -> c_max / n`` and ``d_max -> d_max / n`` (hard constraint ``x <= n``). Measured on
-      ``abcd-big``, both ratios are drawn uniformly and independently of `n`
-      (``corr(n, x) ~ 0.6`` but ``corr(n, x/n) ~ 0.0``) -- the right-skew of the absolute values
-      is purely an artefact of mixing graph sizes, so the plain ratio needs no log.
+    - ``c_max / n`` and ``d_max / n`` (hard constraint ``x <= n``).
     - ``d_min -> log(d_min) / log(d_max)`` (hard constraint ``1 <= d_min <= d_max``), i.e. the
-      exponent ``s`` such that ``d_min = d_max ** s``. The linear ratio ``d_min / d_max`` spans
-      orders of magnitude (std 0.06 on real data); this log-exponent form is well spread (0.15).
+      exponent ``s`` such that ``d_min = d_max ** s``.
     - ``nout -> log1p(nout) / log1p(n)`` (hard constraint ``0 <= nout <= n``); ``log1p`` handles
-      ``nout = 0``. Same rationale as `d_min`: the plain ratio ``nout / n`` occupies a sliver
-      (std 0.014 on real data), its log form does not (0.115).
-    - `n`, `t1`, `t2`, `xi` keep :class:`ABCDConfigScaler`'s linear map from
-      :func:`abcd_param_bounds`, and `c_min` keeps its ``c_min / c_max`` ratio -- already
-      anchor-based and well spread, and the downstream constraint loss relies on the resulting
-      ``c_min <= c_max`` guarantee (see
-      :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`).
+      ``nout = 0``.
+    - `n`, `t1`, `t2`, `xi` keep :class:`ABCDConfigScaler`'s linear map and `c_min` its
+      ``c_min / c_max`` ratio, on which :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`
+      relies for the ``c_min <= c_max`` guarantee.
 
-    .. note::
-        A pure log-against-`n` variant (:class:`ABCDLogConfigScaler`) was tried first and
-        measurably *hurt* ``c_max``/``d_max`` on real data -- their ratios to `n` are uniform,
-        not heavy-tailed, so the log only compressed an already well-spread range. Here the log
-        is kept exactly where the ratio genuinely spans orders of magnitude (`d_min`, `nout`).
-        Check occupancy on real data (per-feature std of scaled values) before changing any of
-        these mappings.
+    The inverse is exact: `n` is denormalised first, then `d_max` before `d_min` and `c_max`
+    before `c_min`.
 
-    The inverse is exact: `n` is denormalised first (every relative feature's inverse needs it),
-    then `d_max` before `d_min` and `c_max` before `c_min`, extending the `c_max`-before-`c_min`
-    ordering :class:`ABCDConfigScaler` already uses.
-
-    :param n_max: Maximum graph size in the dataset, used only for `n` itself. Defaults to
-        10 000, matching :class:`ABCDConfigScaler`.
+    :param n_max: Maximum graph size in the dataset, used only for `n`. Defaults to 10 000.
     """
 
     def __init__(self, n_max: int = 10_000) -> None:

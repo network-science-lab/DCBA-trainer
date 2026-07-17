@@ -7,12 +7,11 @@ random_seed: 42
 data:
   dataset_root: "abcd-big"
   transform: ABCDConfigToTensor
+  # No community features (ablation): constant node features, pure graph structure.
+  node_transform: ConstantNodeFeatures
   scaler:
-    # ABCDLogConfigScaler vs ABCDConfigScaler (used in gps-ae-supcon-output-weights.yaml) is the
-    # only intended difference between this config and that one -- keep everything else in sync
-    # so the comparison isolates the scaler change. See ABCDLogConfigScaler's docstring
-    # (dcba/dataset/transforms.py): c_max/d_min/d_max/nout are log-compressed relative to each
-    # graph's own n instead of linearly against a fixed, dataset-observed bound.
+    # Only intended difference from gps-ae-supcon-output-weights.yaml -- keep everything else in
+    # sync so the comparison isolates the scaler change. See ABCDLogConfigScaler's docstring.
     name: ABCDLogConfigScaler
     args:
       n_max: 10000
@@ -32,15 +31,15 @@ models:
     output_dim: 9
     dropout: 0.1
     attn_dropout: 0.1
-    # GNN_ENCODER_IDEAS.md idea 3: learned soft-clustering pool, no ground-truth community labels
-    # used -- see GPSEncoder docstring / gps_encoder.py. num_clusters is a budget the model can
-    # under-use (usage-entropy aux loss lets it discover how many of these a graph actually
-    # needs), not a claim that every ABCD graph has exactly this many communities -- set well
-    # above the largest community count you expect to see, not at a "typical" value.
+    # Learned soft-clustering pool (see GPSEncoder docstring). num_clusters is a budget the model
+    # can under-use, not a per-graph community count -- set well above the largest expected count.
     num_clusters: 128
-    # Quantile levels read off the per-slot soft cluster sizes in GPSEncoder._cluster_pool,
+    # Quantile levels read off the per-slot soft cluster sizes (see GPSEncoder._cluster_pool).
     cluster_size_quantiles:
       [0.01, 0.05, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 0.95, 0.99]
+    # Disable the usage-entropy aux term: its minimum is all mass on a single slot, which
+    # collapses the cluster-size distribution the quantiles above read. Per-node entropy stays.
+    usage_entropy_weight: 0.0
   theta:
     cls: ConfigAutoEncoder
     input_dim: 9
@@ -52,21 +51,21 @@ training:
   accelerator: gpu
   devices: [0]
   max_epochs: 200
-  aux_weight: 0.1 # weight on the cluster-assignment entropy loss (idea 3)
+  # SupCon (temperature 0.07) produces occasional hard-batch gradient spikes; clip identically
+  # across scaler-comparison runs so the cap is not a confound.
+  gradient_clip_val: 1.0
+  aux_weight: 0.1 # weight on the cluster-assignment entropy loss
   losses:
     reg:
       name: abcd_constraint
       args:
         lambda_penalty: 1.0
         # 'raw' compares the ABCD generator's validity conditions in raw scale, denormalising
-        # predictions through this config's scaler. The legacy 'scaled' mode is wrong under
-        # ABCDLogConfigScaler (falsely fires on 14-15% of valid abcd-big configs for
-        # c_max <= n / d_max <= n). See .analysis/ordering-penalty-fix.md.
+        # predictions through this config's scaler; the legacy 'scaled' mode is wrong under
+        # ABCDLogConfigScaler (see the loss docstring).
         ordering_penalties: raw
-        # Same weights as gps-ae-supcon-output-weights.yaml -- kept fixed so this run isolates the
-        # scaler change. Re-derive with scripts/derive_output_weights.py against this run's own
-        # regression_metrics table once trained, rather than reusing weights measured under the
-        # other scaler.
+        # Same weights as gps-ae-supcon-output-weights.yaml, kept fixed so this run isolates the
+        # scaler change. Re-derive with scripts/derive_output_weights.py once trained.
         weights: [1.028, 1.068, 1.959, 1.320, 1.034, 1.435, 1.473, 1.138, 1.029]
     repr:
       name: supcon
@@ -86,7 +85,7 @@ training:
     tags:
       [
         gps,
-        community-features,
+        no-community-features,
         abcd-constraint,
         bidirectional,
         batch64,

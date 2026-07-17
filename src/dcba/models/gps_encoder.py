@@ -28,27 +28,18 @@ class GPSEncoder(nn.Module):
     Expects ``data["actor"].x`` (node features from
     :class:`~dcba.dataset.transforms.CommunityToSize`) to be pre-computed before batching.
 
-    When ``num_clusters > 0``, a second, learned pooling branch runs alongside the existing
-    flat attention pool: nodes get a soft assignment to up to ``num_clusters`` learned slots (no
-    supervision from ground-truth community labels -- those are generator metadata unavailable
-    on a real graph, see ``GNN_ENCODER_IDEAS.md`` idea 3), and quantiles of the resulting
-    per-slot soft sizes are concatenated into the graph embedding. This is meant to give the
-    model a route to distribution-shape graph properties (e.g. largest-community size, or the
-    community-size power-law exponent) that a single attention-weighted average structurally
-    struggles to represent -- two summary numbers (previously just ``[max, std]``) cannot pin
-    down a heavy-tailed shape, so the full quantile set is exposed instead.
+    When ``num_clusters > 0``, a second learned pooling branch runs alongside the flat attention
+    pool: nodes get a soft assignment to up to ``num_clusters`` learned slots (no supervision from
+    ground-truth community labels, which are generator metadata unavailable on a real graph), and
+    quantiles of the resulting per-slot soft sizes are concatenated into the graph embedding. This
+    gives the model a route to distribution-shape properties (e.g. largest-community size, or the
+    community-size power-law exponent) that a single attention-weighted average cannot represent.
 
-    ``num_clusters`` is a **budget, not an assumed community count** -- ABCD graphs vary in how
-    many communities they actually have, so this must not hard-code a fixed number the way a
-    plain k-means-style pool would. Two auxiliary entropy losses (summed into :attr:`aux_loss`
-    after each :meth:`encode` call, ``None`` when ``num_clusters == 0``) push the assignment
-    towards *discovering* how many slots a given graph actually needs, up to that budget, rather
-    than always spreading mass over all of them: a per-node term (confident, near-one-hot
-    assignment per node) and a per-graph usage term (concentrate total mass on a sparse subset of
-    slots rather than spreading it evenly across all ``num_clusters``). This is the practical,
-    batchable stand-in for HDBSCAN-style "don't fix K upfront" clustering -- an unbounded,
-    density-based cluster count is not compatible with fixed-shape batched GPU tensors, so the
-    budget is fixed but *usage* of it is learned per graph instead.
+    ``num_clusters`` is a budget, not an assumed community count: ABCD graphs vary in how many
+    communities they have, so two auxiliary entropy losses (summed into :attr:`aux_loss` after
+    each :meth:`encode` call, ``None`` when ``num_clusters == 0``) let the model use fewer slots
+    than the budget -- a per-node term (near-one-hot assignment) and a per-graph usage term
+    (concentrate mass on a sparse subset of slots).
 
     :param hidden_dim: Channel width used throughout all GPS layers.
     :param num_layers: Number of GPS layers.
@@ -59,17 +50,18 @@ class GPSEncoder(nn.Module):
     :param attn_dropout: Dropout probability applied to attention weights.
     :param attn_type: Attention mechanism used in each GPS layer (e.g. ``"multihead"``,
         ``"performer"``). Use ``"performer"`` for O(N) linear attention when memory is limited.
-    :param num_clusters: Upper bound on the number of soft-clustering slots for the hierarchical
-        pooling branch described above -- a budget the model can under-use, not a claim about the
-        true number of communities. ``0`` (default) disables the branch entirely, matching prior
-        behaviour. Set generously relative to the largest expected community count; too tight a
-        budget re-introduces the same "forced to squeeze everything into too few slots" problem
-        this branch exists to avoid -- see ``scripts/recommend_num_clusters.py`` to pick a
-        data-backed value instead of guessing.
+    :param num_clusters: Upper bound on the number of soft-clustering slots (a budget, see above).
+        ``0`` (default) disables the branch entirely, matching prior behaviour. Set generously
+        relative to the largest expected community count; see ``scripts/recommend_num_clusters.py``
+        to pick a data-backed value.
     :param cluster_size_quantiles: Quantile levels (each in ``[0, 1]``) computed over the
         per-slot soft cluster sizes and concatenated into the graph embedding alongside the
         max-pooled cluster embedding. Only used when ``num_clusters > 0``. Include ``1.0`` to
         keep a plain max in the mix.
+    :param usage_entropy_weight: Weight on the per-graph usage-entropy term inside
+        :attr:`aux_loss`. Its minimum is all mass on a single slot, which collapses
+        ``cluster_size`` and destroys the size-distribution signal the quantile readout exposes;
+        set ``0.0`` to keep only the per-node entropy. Default ``1.0`` preserves prior behaviour.
     """
 
     def __init__(
@@ -84,6 +76,7 @@ class GPSEncoder(nn.Module):
         attn_type: str = "multihead",
         num_clusters: int = 0,
         cluster_size_quantiles: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0),
+        usage_entropy_weight: float = 1.0,
     ) -> None:
         """Build GPS layers, pooling, and decoder from the supplied parameters."""
         if hidden_dim % num_heads != 0:
@@ -94,7 +87,11 @@ class GPSEncoder(nn.Module):
 
         self._num_clusters = num_clusters
         self._cluster_size_quantiles = tuple(cluster_size_quantiles)
+        self._usage_entropy_weight = usage_entropy_weight
         self.aux_loss: Tensor | None = None
+        #: Detached usage entropy of the last :meth:`encode` call, a pure diagnostic (independent
+        #: of ``usage_entropy_weight``): ``exp(value)`` ~ effective number of occupied slots.
+        self.usage_entropy: Tensor | None = None
 
         self._input_proj = nn.Linear(1, hidden_dim)
 
@@ -164,16 +161,14 @@ class GPSEncoder(nn.Module):
         cluster_embed = torch.einsum("bnk,bnh->bkh", soft_assign, dense_agg)  # (B, K, H)
         cluster_size = soft_assign.sum(dim=1)  # (B, K)
 
-        # K is a budget, not an assumed community count (ABCD graphs vary in how many communities
-        # they actually have) -- this term is what lets the model use fewer than K slots per
-        # graph instead of always spreading mass over all of them. Minimising the entropy of the
-        # *per-graph usage distribution* (how much total mass each of the K slots received,
-        # normalised across slots) pushes usage towards a sparse subset of slots; unminimised, a
-        # softmax over K categories has no pressure to leave any of them empty.
+        # Per-graph usage entropy over the K slots -- minimising it lets the model concentrate on
+        # a sparse subset of slots rather than using all K (see class docstring). Its minimum is a
+        # single occupied slot, so weight 0 disables it when the readout needs a spread cluster_size.
         usage = cluster_size / cluster_size.sum(dim=-1, keepdim=True).clamp_min(1e-8)
         usage_entropy = -(usage * usage.clamp_min(1e-8).log()).sum(dim=-1).mean()
 
-        self.aux_loss = node_entropy + usage_entropy
+        self.aux_loss = node_entropy + self._usage_entropy_weight * usage_entropy
+        self.usage_entropy = usage_entropy.detach()
 
         cluster_pool = cluster_embed.max(dim=1).values  # (B, H)
         q = cluster_size.new_tensor(self._cluster_size_quantiles)  # (Q,)

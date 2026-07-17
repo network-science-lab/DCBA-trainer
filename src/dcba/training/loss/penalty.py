@@ -42,15 +42,13 @@ class ABCDConstraintPenaltyLoss(nn.Module):
     - ``"raw"`` (recommended): comparisons happen in **raw scale**, obtained by passing ``x_hat``
       through the scaler's differentiable :meth:`denormalise` (attach the scaler with
       :meth:`set_scaler`; the training entry point does this automatically). Each violation is
-      divided by the same sample's raw ``n``, so the hinge is dimensionless and O(1) regardless
-      of graph size. Correct under any scaler.
+      divided by the target's raw ``n`` so the hinge is dimensionless and O(1). Correct under any
+      scaler.
     - ``"scaled"`` (legacy, default; also accepts ``True``): comparisons happen on the scaled
-      values directly. Only meaningful when the compared features share one scaling map. Under
-      :class:`~dcba.dataset.transforms.ABCDConfigScaler`'s per-feature bounds the
-      ``d_min <= d_max`` term actually enforces ``d_min <= d_max / 60`` and falsely fires on 27%
-      of valid ``abcd-big`` configs -- kept as the default only for comparability with
-      already-trained runs (see ``.analysis/ordering-penalty-fix.md``); prefer ``"raw"`` for new
-      experiments.
+      values directly. Only meaningful when the compared features share one scaling map -- under
+      :class:`~dcba.dataset.transforms.ABCDConfigScaler`'s per-feature bounds it misfires on
+      valid configs. Kept as the default only for comparability with already-trained runs; prefer
+      ``"raw"`` for new experiments.
     - ``"none"`` (also accepts ``False``): ordering penalties disabled; the ``[0, 1]`` range
       penalty stays. Sufficient on its own under
       :class:`~dcba.dataset.transforms.ABCDRelativeConfigScaler`, where every ordering is
@@ -71,9 +69,8 @@ class ABCDConstraintPenaltyLoss(nn.Module):
     :param lambda_penalty: Weight applied to the sum of constraint penalty terms.
     :param weights: Optional per-feature weight applied to the squared error before averaging,
         length 9 in :data:`~dcba.dataset.transforms.ABCD_CONFIG_KEYS` order. Use this to give
-        parameters with a large graph-encoder ``regr -> cross`` R2 gap more gradient priority
-        (see ``GNN_ENCODER_IDEAS.md``, idea 7). ``None`` (default) weights every feature equally,
-        identical to plain MSE.
+        harder-to-reconstruct parameters more gradient priority. ``None`` (default) weights every
+        feature equally, identical to plain MSE.
     :param ordering_penalties: ``"raw"``, ``"scaled"`` or ``"none"`` -- see above. Booleans are
         accepted for backwards compatibility (``True -> "scaled"``, ``False -> "none"``).
     """
@@ -113,11 +110,13 @@ class ABCDConstraintPenaltyLoss(nn.Module):
         """
         self._scaler = scaler
 
-    def _ordering_penalty(self, x_hat: Tensor) -> Tensor:
+    def _ordering_penalty(self, x_hat: Tensor, target: Tensor) -> Tensor:
         """
         Compute the mean squared-hinge ordering penalty for ``x_hat`` per :attr:`ordering_mode`.
 
         :param x_hat: Reconstructed normalised config tensor of shape ``(batch, 9)``.
+        :param target: Ground-truth normalised config tensor of shape ``(batch, 9)``; in
+            ``"raw"`` mode its denormalised ``n`` provides the per-sample violation scale.
 
         :returns: Scalar penalty tensor (``0`` when the mode is ``"none"``).
         """
@@ -130,9 +129,11 @@ class ABCDConstraintPenaltyLoss(nn.Module):
                     "ordering_penalties='raw' requires a scaler; call set_scaler() first."
                 )
             values = self._scaler.denormalise(x_hat)
-            # Dimensionless O(1) violations: a raw-count gap of e.g. 300 means something very
-            # different at n=500 vs n=10000, and an unnormalised hinge would dwarf the MSE term.
-            scale = values[:, 0].clamp(min=1.0)
+            # Normalise by the TARGET's raw n: constant, strictly positive, and independent of the
+            # prediction, so the hinge stays linear with a correct-direction gradient and cannot
+            # blow up (dividing by the predicted n, or a self-normalising denominator, breaks one
+            # or the other).
+            scale = self._scaler.denormalise(target.detach())[:, 0].clamp(min=1.0)
         else:
             values = x_hat
             scale = x_hat.new_ones(x_hat.shape[0])
@@ -168,5 +169,5 @@ class ABCDConstraintPenaltyLoss(nn.Module):
         above = F.relu(x_hat[:, 1:] - 1.0)  # features 1-8 only
         range_penalty = (below**2).sum(dim=1).mean() + (above**2).sum(dim=1).mean()
 
-        penalty = range_penalty + self._ordering_penalty(x_hat)
+        penalty = range_penalty + self._ordering_penalty(x_hat, target)
         return mse + self.lambda_penalty * penalty

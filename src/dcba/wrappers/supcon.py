@@ -167,6 +167,13 @@ class DCBASupConWrapper(KLRegularisedMixin, DCBABaseWrapper):
         if aux_loss is not None:
             loss = loss + self._aux_weight * aux_loss
             self.log(f"{stage}_loss-cluster-entropy", aux_loss, batch_size=batch_size)
+            # Logged separately from aux_loss because usage_entropy_weight=0 drops it from the
+            # loss (see GPSEncoder.usage_entropy for what exp(value) means).
+            usage_entropy = getattr(self._graph_encoder, "usage_entropy", None)
+            if usage_entropy is not None:
+                self.log(
+                    f"{stage}_loss-cluster-usage-entropy", usage_entropy, batch_size=batch_size
+                )
 
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch_size)
         self.log(f"{stage}_loss-reg-t", l_reg_zt, batch_size=batch_size)
