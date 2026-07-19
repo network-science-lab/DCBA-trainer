@@ -28,13 +28,13 @@ training:
   max_epochs: 0
   num_sanity_val_steps: 0
   baseline:
-    detect_communities: true
+    detect_communities: false
     leiden_resolution: 1.0
     leiden_seed: 42
     d_max_iter: 1000
     c_max_iter: 1000
-    natural_cutoff: false
+    natural_cutoff: true
   logger:
     project: dcba
-    name: baseline-leiden-communities
-    tags: [baseline, heuristic, leiden-communities, abcd-big]
+    name: baseline-gt-communities-natural-cutoff
+    tags: [baseline, heuristic, ground-truth-communities, natural-cutoff, abcd-big]

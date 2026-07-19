@@ -39,6 +39,9 @@ class DCBABaselineWrapper(DCBABaseWrapper):
         ``ABCDConfig``.
     :param c_max_iter: Maximum community-sampling iterations, passed through to the resulting
         ``ABCDConfig``.
+    :param natural_cutoff: If True, estimate d_max and c_max using the natural cutoff formula
+        instead of the raw sample maximum, which underestimates the true upper bound of a
+        truncated power-law sample.
     """
 
     def __init__(
@@ -48,6 +51,7 @@ class DCBABaselineWrapper(DCBABaseWrapper):
         leiden_seed: int | None = None,
         d_max_iter: int = 1000,
         c_max_iter: int = 1000,
+        natural_cutoff: bool = False,
     ) -> None:
         """Initialise the wrapper with the BaselineConfig hyperparameters."""
         super().__init__()
@@ -57,6 +61,7 @@ class DCBABaselineWrapper(DCBABaseWrapper):
         self._leiden_seed = leiden_seed
         self._d_max_iter = d_max_iter
         self._c_max_iter = c_max_iter
+        self._natural_cutoff = natural_cutoff
         self._test_rows: list[tuple[str, int, list[float], list[float]]] = []
 
     def training_step(self, batch: DCBAHeteroData, batch_idx: int) -> None:
@@ -87,6 +92,7 @@ class DCBABaselineWrapper(DCBABaseWrapper):
             detect_communities=self._detect_communities,
             leiden_resolution=self._leiden_resolution,
             leiden_seed=self._leiden_seed,
+            natural_cutoff=self._natural_cutoff,
         ).get_config()
         pred_values = [float(getattr(predicted, key)) for key in ABCD_CONFIG_KEYS]
         pred_tensor = torch.tensor(pred_values, dtype=torch.float32).unsqueeze(0)

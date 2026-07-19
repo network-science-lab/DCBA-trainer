@@ -33,6 +33,7 @@ training:
     leiden_seed: 42
     d_max_iter: 1000
     c_max_iter: 1000
+    natural_cutoff: false
   logger:
     project: dcba
     name: baseline-gt-communities

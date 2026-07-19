@@ -101,6 +101,13 @@ class TestDCBABaselineWrapperTestStep:
         assert len(wrapper._test_rows) == len(test_loader.dataset)
         assert "test_loss" in metrics[-1]
 
+    def test_natural_cutoff(self, test_loader: DataLoader) -> None:
+        """natural_cutoff=True also produces one prediction row per graph."""
+        wrapper = DCBABaselineWrapper(natural_cutoff=True)
+        metrics = _run_test(wrapper, test_loader)
+        assert len(wrapper._test_rows) == len(test_loader.dataset)
+        assert "test_loss" in metrics[-1]
+
     def test_predicted_n_matches_true_n(self, test_loader: DataLoader) -> None:
         """Predicted node count always matches ground truth exactly (n is read off the graph)."""
         wrapper = DCBABaselineWrapper()
