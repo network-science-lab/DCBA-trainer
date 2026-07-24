@@ -10,45 +10,34 @@ from dcba.dataset.scalers import ABCDBaseConfigScaler
 
 class ABCDConstraintPenaltyLoss(nn.Module):
     """
-    MSE reconstruction loss augmented with squared-hinge penalties for ABCD config constraints.
+    MSE reconstruction loss plus squared-hinge penalties for ABCD config constraints.
 
-    The total loss is::
+    Total loss: ``weighted_MSE(x_hat, target) + lambda * sum(relu(violation)^2)``.
 
-        weighted_MSE(x_hat, target) + lambda * sum(relu(violation)^2)
-
-    Per-feature range penalties ensure every predicted feature stays within ``[0, 1]``
-    (normalised space). Cross-parameter ordering penalties enforce the structural constraints
-    the ABCD generator requires to run at all:
+    Per-feature range penalties keep every predicted feature in ``[0, 1]``. Ordering penalties
+    enforce, in raw scale via the attached scaler's :meth:`denormalise` (attach with
+    :meth:`set_scaler`):
 
     - ``d_min <= d_max``
     - ``c_max <= n``
     - ``d_max <= n``
     - ``nout <= n``
 
-    Ordering comparisons always happen in **raw scale**, obtained by passing ``x_hat`` through
-    the attached scaler's differentiable
-    :meth:`~dcba.dataset.scalers.ABCDBaseConfigScaler.denormalise` (attach it with
-    :meth:`set_scaler`; the training entry point does this automatically). Each
-    violation is divided by the target's raw ``n`` so the hinge is dimensionless and O(1). This
-    is correct under any scaler.
+    Violations are divided by the target's raw ``n`` to keep the hinge dimensionless.
 
     .. note::
-        ``c_min <= c_max`` is deliberately not enforced here: every scaler expresses ``c_min`` as
-        ``c_min / c_max`` (see :class:`~dcba.dataset.scalers.ABCDConfigScaler`), so the
-        ordering is guaranteed by construction together with the range penalty.
+        ``c_min <= c_max`` is not enforced here -- guaranteed by the scaler's ``c_min/c_max``
+        ratio together with the range penalty.
 
     .. note::
-        ``n`` (index 0) is exempt from the above-range penalty (``> 1`` in normalised space)
-        to accommodate edge cases where the model predicts graphs larger than ``n_max``.
+        ``n`` is exempt from the above-range penalty, to allow predictions above ``n_max``.
 
-    Feature indices follow :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS`:
-    ``[n, t1, t2, xi, c_min, c_max, d_min, d_max, nout]`` -> indices 0-8.
+    Feature order follows :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS`.
 
-    :param lambda_penalty: Weight applied to the sum of constraint penalty terms.
-    :param weights: Optional per-feature weight applied to the squared error before averaging,
-        length 9 in :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS` order. Use this to give
-        harder-to-reconstruct parameters more gradient priority. ``None`` (default) weights every
-        feature equally, identical to plain MSE.
+    :param lambda_penalty: Weight applied to the penalty terms.
+    :param weights: Optional per-feature weight for the squared error, length 9 in
+        :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS` order. ``None`` weights every feature
+        equally (plain MSE).
     """
 
     def __init__(
@@ -67,10 +56,6 @@ class ABCDConstraintPenaltyLoss(nn.Module):
     def set_scaler(self, scaler: ABCDBaseConfigScaler | None) -> None:
         """
         Attach the scaler whose :meth:`denormalise` maps ``x_hat`` to raw scale.
-
-        Required before the first forward pass. Kept out of the constructor so config-driven
-        construction (``_build_loss(args)``) stays purely declarative -- the training entry point
-        attaches the data pipeline's scaler after both are built.
 
         :param scaler: Scaler providing a differentiable ``denormalise``, or ``None`` to detach.
         """

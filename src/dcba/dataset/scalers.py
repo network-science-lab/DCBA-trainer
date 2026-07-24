@@ -12,6 +12,10 @@ from torch_geometric.transforms import BaseTransform
 #: Ordered list of numerical ABCD config keys used as model input features.
 ABCD_CONFIG_KEYS: list[str] = ["n", "t1", "t2", "xi", "c_min", "c_max", "d_min", "d_max", "nout"]
 
+ABCD_INT_FEATURE_INDICES: list[int] = [0, 4, 5, 6, 7, 8]
+
+_LOG_N_RELATIVE_KEYS: tuple[str, ...] = ("c_max", "d_min", "d_max", "nout")
+
 
 class ABCDConfigSchema(BaseModel):
     """Pydantic schema for the 9-parameter ABCD generator configuration.
@@ -30,20 +34,14 @@ class ABCDConfigSchema(BaseModel):
     nout: float
 
 
-#: Indices within :data:`ABCD_CONFIG_KEYS` that correspond to integer-valued parameters.
-ABCD_INT_FEATURE_INDICES: list[int] = [0, 4, 5, 6, 7, 8]  # n, c_min, c_max, d_min, d_max, nout
-
-
 @lru_cache()
 def abcd_param_bounds(n_max: int = 10_000) -> dict[str, tuple[float, float]]:
     """
     Return per-feature ``(lo, hi)`` bounds for ABCD config normalisation.
 
-    Bounds combine ABCDGraphGenerator.jl hard constraints (``t1``, ``t2`` >= 1; ``xi`` in
-    ``[0, 1]``) with per-feature maxima observed on ``abcd-big``. Each size-like feature gets its
-    own bound rather than a shared ``n_max``, so none is starved into a sliver of ``[0, 1]``.
-    ``c_min`` is bounded ``[0, 1]`` because :class:`ABCDConfigScaler` scales it as a fraction of
-    ``c_max``, not as an absolute count.
+    ``t1``/``t2`` >= 1 and ``xi`` in ``[0, 1]`` are hard generator constraints; the rest are
+    per-feature maxima observed on ``abcd-big``. ``c_min``'s bound is ``[0, 1]`` since
+    :class:`ABCDConfigScaler` scales it as a fraction of ``c_max``.
 
     :param n_max: Maximum graph size in the dataset; used only for the ``n`` bound.
 
@@ -63,15 +61,39 @@ def abcd_param_bounds(n_max: int = 10_000) -> dict[str, tuple[float, float]]:
     }
 
 
+@lru_cache()
+def abcd_nmax_bounds(n_max: int = 10_000) -> dict[str, tuple[float, float]]:
+    """
+    Return per-feature ``(lo, hi)`` bounds for :class:`ABCDNMaxConfigScaler`.
+
+    Every size feature (``n``, ``c_min``, ``c_max``, ``d_min``, ``d_max``, ``nout``) shares the
+    ``n_max`` upper bound; ``t1``, ``t2``, ``xi`` keep their own hard-constraint bounds.
+
+    :param n_max: Maximum graph size in the dataset; upper bound for all size-like features.
+
+    :returns: Dict mapping each key in :data:`ABCD_CONFIG_KEYS` to ``(lo, hi)``.
+    """
+    n = float(n_max)
+    return {
+        "n": (1.0, n),  # @assert n > 0
+        "t1": (1.0, 5.0),  # @assert alpha >= 1
+        "t2": (1.0, 5.0),  # @assert alpha >= 1
+        "xi": (0.0, 1.0),  # 0 <= xi <= 1 (hard constraint)
+        "c_min": (1.0, n),  # >= 1; c_min <= c_max <= n
+        "c_max": (1.0, n),  # c_max <= n (ABCDConfig validator)
+        "d_min": (1.0, n),  # @assert 1 <= d_min
+        "d_max": (1.0, n),  # @assert d_max >= d_min
+        "nout": (0.0, n),  # 0 <= nout <= n (ABCDConfig validator)
+    }
+
+
 class ABCDBaseConfigScaler:
     """
     Shared scaffolding for the ``[0, 1]`` ABCD config scalers below.
 
-    Factors out what would otherwise be copy-pasted across every scaler: the ``c_min / c_max``
-    ratio helpers (used by every scaler except :class:`ABCDNMaxConfigScaler`, whose ``c_min`` is a
-    plain linear feature instead), the integer-rounding :meth:`inverse_transform`, and
-    :meth:`__call__`. Subclasses implement :meth:`transform` and :meth:`denormalise` themselves,
-    since the per-feature maths genuinely differs scaler to scaler.
+    Provides the ``c_min/c_max`` ratio helpers (unused by :class:`ABCDNMaxConfigScaler`), the
+    integer-rounding :meth:`inverse_transform`, and :meth:`__call__`. Subclasses implement
+    :meth:`transform`/:meth:`denormalise`.
     """
 
     def __init__(self) -> None:
@@ -123,8 +145,8 @@ class ABCDBaseConfigScaler:
 
         :param x: Normalised float tensor of shape ``(..., 9)`` (only its ``c_min`` column is
             read).
-        :param c_max_raw: Already-recovered raw ``c_max``, clamped by the caller if needed --
-            scalers differ on whether this clamp is necessary, so it is not applied here.
+        :param c_max_raw: Already-recovered raw ``c_max``. Clamp before calling if needed; not
+            applied here.
 
         :returns: Raw ``c_min`` column, shape ``(...,)``.
         """
@@ -135,15 +157,10 @@ class ABCDConfigScaler(ABCDBaseConfigScaler):
     """
     Normalise and denormalise ABCD config tensors feature-wise to ``[0, 1]``.
 
-    Uses a linear (min-max) map per feature sourced from :func:`abcd_param_bounds`, except
-    ``c_min``, which is scaled as ``c_min / c_max`` instead (both already ``[0, 1]``-bounded by
-    ``abcd_param_bounds`` -- see its docstring for why a fixed bound does not work for ``c_min``).
+    Linear (min-max) map per feature from :func:`abcd_param_bounds`, except ``c_min``, scaled as
+    ``c_min / c_max``. The inverse is exact.
 
-    The inverse is exact, making this usable at inference time to recover human-readable configs
-    from model output.
-
-    :param n_max: Maximum graph size in the dataset.  Passed directly to :func:`abcd_param_bounds`.
-        Defaults to 10 000, matching the canonical ABCDGraphGenerator.jl example configuration.
+    :param n_max: Maximum graph size in the dataset. Defaults to 10 000.
     """
 
     def __init__(self, n_max: int = 10_000) -> None:
@@ -169,10 +186,7 @@ class ABCDConfigScaler(ABCDBaseConfigScaler):
         """
         Recover the original scale from a normalised tensor, without integer rounding.
 
-        Fully differentiable -- built column-wise without in-place writes so gradients can flow
-        through the inverse map (e.g. raw-space constraint penalties in
-        :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`). Use
-        :meth:`inverse_transform` instead when integer-rounded configs are wanted.
+        Fully differentiable. Use :meth:`inverse_transform` for integer-rounded output.
 
         :param x: Normalised float tensor of shape ``(..., 9)``.
 
@@ -187,57 +201,14 @@ class ABCDConfigScaler(ABCDBaseConfigScaler):
         return torch.stack(cols, dim=-1)
 
 
-def abcd_nmax_bounds(n_max: int = 10_000) -> dict[str, tuple[float, float]]:
-    """
-    Return per-feature ``(lo, hi)`` bounds with a single shared ``n_max`` cap on size features.
-
-    Legacy bounds used by :class:`ABCDNMaxConfigScaler`: every feature analytically bounded by
-    ``n`` in ABCDGraphGenerator.jl (``n``, ``c_min``, ``c_max``, ``d_min``, ``d_max``, ``nout``)
-    shares the same ``n_max``-sized upper bound, so each is normalised by dividing by ``n_max``.
-    ``t1``, ``t2`` (``@assert alpha >= 1``, upper ~5 in practice) and ``xi`` (``0 <= xi <= 1``)
-    keep their own hard-constraint bounds.
-
-    Kept separate from :func:`abcd_param_bounds` -- whose size features now use per-feature maxima
-    observed on ``abcd-big`` -- so the naive shared-``n_max`` baseline remains available for
-    scaler-comparison experiments.
-
-    :param n_max: Maximum graph size in the dataset; upper bound for all size-like features.
-
-    :returns: Dict mapping each key in :data:`ABCD_CONFIG_KEYS` to ``(lo, hi)``.
-    """
-    n = float(n_max)
-    return {
-        "n": (1.0, n),  # @assert n > 0
-        "t1": (1.0, 5.0),  # @assert alpha >= 1
-        "t2": (1.0, 5.0),  # @assert alpha >= 1
-        "xi": (0.0, 1.0),  # 0 <= xi <= 1 (hard constraint)
-        "c_min": (1.0, n),  # >= 1; c_min <= c_max <= n
-        "c_max": (1.0, n),  # c_max <= n (ABCDConfig validator)
-        "d_min": (1.0, n),  # @assert 1 <= d_min
-        "d_max": (1.0, n),  # @assert d_max >= d_min
-        "nout": (0.0, n),  # 0 <= nout <= n (ABCDConfig validator)
-    }
-
-
 class ABCDNMaxConfigScaler(ABCDBaseConfigScaler):
     """
-    Normalise and denormalise ABCD config tensors feature-wise to ``[0, 1]``.
+    Legacy linear scaler: every feature, including ``c_min``, divides by a shared ``n_max``.
 
-    Divides every size-like feature by a single shared ``n_max``.
-    Legacy linear (min-max) scaler: the pre-per-feature-bounds :class:`ABCDConfigScaler`, preserved
-    as a baseline. Every feature -- including ``c_min`` -- uses the linear map from
-    :func:`abcd_nmax_bounds`, so ``c_min``, ``c_max``, ``d_min``, ``d_max`` and ``nout`` all divide
-    by ``n_max`` rather than by per-feature maxima or a per-graph anchor. Unlike the current
-    :class:`ABCDConfigScaler`, ``c_min`` is *not* rescaled as ``c_min / c_max`` -- the
-    :meth:`~ABCDBaseConfigScaler._scale_c_min`/:meth:`~ABCDBaseConfigScaler._unscale_c_min` helpers
-    are therefore unused here.
+    Uses :func:`abcd_nmax_bounds`. ``c_min`` is not a ``c_min/c_max`` ratio here, so the base
+    class's ``_scale_c_min``/``_unscale_c_min`` helpers are unused. The inverse is exact.
 
-    The inverse is exact (linear map), making this usable at inference time to recover
-    human-readable configs from model output. :meth:`denormalise` provides the differentiable
-    inverse required by :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss` in ``"raw"`` mode.
-
-    :param n_max: Maximum graph size in the dataset.  Passed directly to :func:`abcd_nmax_bounds`.
-        Defaults to 10 000, matching the canonical ABCDGraphGenerator.jl example configuration.
+    :param n_max: Maximum graph size in the dataset. Defaults to 10 000.
     """
 
     def __init__(self, n_max: int = 10_000) -> None:
@@ -261,10 +232,7 @@ class ABCDNMaxConfigScaler(ABCDBaseConfigScaler):
         """
         Recover the original scale from a normalised tensor, without integer rounding.
 
-        Fully differentiable -- a plain linear inverse map, so gradients flow through it (e.g.
-        raw-space constraint penalties in
-        :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`). Use :meth:`inverse_transform`
-        instead when integer-rounded configs are wanted.
+        Fully differentiable (plain linear inverse map).
 
         :param x: Normalised float tensor of shape ``(..., 9)``.
 
@@ -275,22 +243,13 @@ class ABCDNMaxConfigScaler(ABCDBaseConfigScaler):
         return x * (hi - lo) + lo
 
 
-#: Size-like features scaled as ``log1p(x) / log1p(n)`` by :class:`ABCDLogConfigScaler`.
-_LOG_N_RELATIVE_KEYS: tuple[str, ...] = ("c_max", "d_min", "d_max", "nout")
-
-
 class ABCDLogConfigScaler(ABCDBaseConfigScaler):
     """
-    Normalise ABCD config tensors to ``[0, 1]``, log-compressing size-like features against `n`.
+    Log-compresses size-like features against `n`.
 
-    Maps ``c_max``, ``d_min``, ``d_max`` and ``nout`` as ``log1p(x) / log1p(n)`` -- relative to
-    each graph's own `n` rather than a fixed bound, so the map adapts to any `n` and spreads
-    heavy-tailed values across ``[0, 1]``. `n` itself is scaled as ``log1p(n) / log1p(n_max)``.
-    `t1`, `t2`, `xi` keep :class:`ABCDConfigScaler`'s linear map and `c_min` its ``c_min / c_max``
-    ratio.
-
-    The inverse is exact: :meth:`inverse_transform` denormalises `n` first (every log-relative
-    feature depends on it), then `c_max` before `c_min`.
+    ``c_max``, ``d_min``, ``d_max``, ``nout`` as ``log1p(x) / log1p(n)``; `n` as
+    ``log1p(n) / log1p(n_max)``. `t1`, `t2`, `xi`, `c_min` keep :class:`ABCDConfigScaler`'s
+    treatment. The inverse is exact.
 
     :param n_max: Maximum graph size in the dataset, used only to scale `n`. Defaults to 10 000.
     """
@@ -335,8 +294,7 @@ class ABCDLogConfigScaler(ABCDBaseConfigScaler):
         """
         Recover the original scale from a normalised tensor, without integer rounding.
 
-        Fully differentiable counterpart of :meth:`inverse_transform`, built column-wise without
-        in-place writes -- see :meth:`ABCDConfigScaler.denormalise` for when to use which.
+        Fully differentiable. Use :meth:`inverse_transform` for integer-rounded output.
 
         :param x: Normalised float tensor of shape ``(..., 9)``.
 
@@ -361,21 +319,15 @@ class ABCDLogConfigScaler(ABCDBaseConfigScaler):
 
 class ABCDRelativeConfigScaler(ABCDBaseConfigScaler):
     """
-    Normalise ABCD config tensors to ``[0, 1]`` using hard-constraint anchors.
+    Normalise ABCD config tensors to ``[0, 1]`` using hard-constraint anchors, not dataset bounds.
 
-    Anchors are readable from any graph, with no dataset-estimated bounds needed:
+    - ``c_max/n``, ``d_max/n`` (``x <= n``).
+    - ``d_min -> log(d_min)/log(d_max)`` (``d_min <= d_max``), i.e. the exponent ``s`` in
+      ``d_min = d_max ** s``.
+    - ``nout -> log1p(nout)/log1p(n)`` (``nout <= n``).
+    - `n`, `t1`, `t2`, `xi`, `c_min` keep :class:`ABCDConfigScaler`'s treatment.
 
-    - ``c_max / n`` and ``d_max / n`` (hard constraint ``x <= n``).
-    - ``d_min -> log(d_min) / log(d_max)`` (hard constraint ``1 <= d_min <= d_max``), i.e. the
-      exponent ``s`` such that ``d_min = d_max ** s``.
-    - ``nout -> log1p(nout) / log1p(n)`` (hard constraint ``0 <= nout <= n``); ``log1p`` handles
-      ``nout = 0``.
-    - `n`, `t1`, `t2`, `xi` keep :class:`ABCDConfigScaler`'s linear map and `c_min` its
-      ``c_min / c_max`` ratio, on which :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`
-      relies for the ``c_min <= c_max`` guarantee.
-
-    The inverse is exact: `n` is denormalised first, then `d_max` before `d_min` and `c_max`
-    before `c_min`.
+    The inverse is exact: `n`, then `d_max` before `d_min`, then `c_max` before `c_min`.
 
     :param n_max: Maximum graph size in the dataset, used only for `n`. Defaults to 10 000.
     """
@@ -429,8 +381,7 @@ class ABCDRelativeConfigScaler(ABCDBaseConfigScaler):
         """
         Recover the original scale from a normalised tensor, without integer rounding.
 
-        Fully differentiable counterpart of :meth:`inverse_transform`, built column-wise without
-        in-place writes -- see :meth:`ABCDConfigScaler.denormalise` for when to use which.
+        Fully differentiable. Use :meth:`inverse_transform` for integer-rounded output.
 
         :param x: Normalised float tensor of shape ``(..., 9)``.
 
@@ -458,15 +409,10 @@ class ABCDRelativeConfigScaler(ABCDBaseConfigScaler):
 
 class ABCDIdentityConfigScaler(ABCDBaseConfigScaler):
     """
-    No-op scaler: leaves every ABCD config feature in its raw scale.
+    No-op scaler: every feature stays in raw scale.
 
-    Gives the "no scaling" comparison arm a real scaler object rather than ``None``, so it can be
-    attached to :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss` like any other scaler --
-    that loss requires a scaler with a differentiable :meth:`denormalise` to compare orderings in
-    raw scale, regardless of which (if any) scaling the data pipeline itself applies.
-
-    :meth:`inverse_transform` (inherited) still rounds integer-valued features, since that step is
-    about output presentation, not about undoing a scaling map.
+    Gives the "no scaling" comparison arm a real scaler object (rather than ``None``) to attach
+    to :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`, which always requires one.
     """
 
     def transform(self, x: Tensor) -> Tensor:
