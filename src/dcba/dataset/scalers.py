@@ -63,7 +63,75 @@ def abcd_param_bounds(n_max: int = 10_000) -> dict[str, tuple[float, float]]:
     }
 
 
-class ABCDConfigScaler:
+class ABCDBaseConfigScaler:
+    """
+    Shared scaffolding for the ``[0, 1]`` ABCD config scalers below.
+
+    Factors out what would otherwise be copy-pasted across every scaler: the ``c_min / c_max``
+    ratio helpers (used by every scaler except :class:`ABCDNMaxConfigScaler`, whose ``c_min`` is a
+    plain linear feature instead), the integer-rounding :meth:`inverse_transform`, and
+    :meth:`__call__`. Subclasses implement :meth:`transform` and :meth:`denormalise` themselves,
+    since the per-feature maths genuinely differs scaler to scaler.
+    """
+
+    def __init__(self) -> None:
+        """Cache the ``c_min``/``c_max`` feature indices used by the ratio helpers below."""
+        self._c_min_idx = ABCD_CONFIG_KEYS.index("c_min")
+        self._c_max_idx = ABCD_CONFIG_KEYS.index("c_max")
+
+    def transform(self, x: Tensor) -> Tensor:
+        """Normalise ``x`` to ``[0, 1]`` per feature. Implemented by each subclass."""
+        raise NotImplementedError
+
+    def denormalise(self, x: Tensor) -> Tensor:
+        """Recover the original scale from a normalised tensor. Implemented by each subclass."""
+        raise NotImplementedError
+
+    def inverse_transform(self, x: Tensor) -> Tensor:
+        """
+        Recover the original scale from a normalised tensor.
+
+        Integer-valued features (indices :data:`ABCD_INT_FEATURE_INDICES`) are rounded to the
+        nearest whole number after :meth:`denormalise`. The tensor dtype remains ``float32``.
+
+        :param x: Normalised float tensor of shape ``(..., 9)``.
+
+        :returns: Tensor in the original feature scale.
+        """
+        out = self.denormalise(x)
+        out[..., ABCD_INT_FEATURE_INDICES] = out[..., ABCD_INT_FEATURE_INDICES].round()
+        return out
+
+    def __call__(self, x: Tensor) -> Tensor:
+        """Apply :meth:`transform`."""
+        return self.transform(x)
+
+    def _scale_c_min(self, x: Tensor) -> Tensor:
+        """
+        Compute ``c_min`` as a fraction of raw ``c_max`` (clamped >= 1 to avoid a div by zero).
+
+        :param x: Float tensor of shape ``(..., 9)``, raw (unscaled) feature values.
+
+        :returns: Normalised ``c_min`` column, shape ``(...,)``.
+        """
+        c_max_raw = x[..., self._c_max_idx].clamp(min=1.0)
+        return x[..., self._c_min_idx] / c_max_raw
+
+    def _unscale_c_min(self, x: Tensor, c_max_raw: Tensor) -> Tensor:
+        """
+        Recover raw ``c_min`` from its ``c_min / c_max`` ratio.
+
+        :param x: Normalised float tensor of shape ``(..., 9)`` (only its ``c_min`` column is
+            read).
+        :param c_max_raw: Already-recovered raw ``c_max``, clamped by the caller if needed --
+            scalers differ on whether this clamp is necessary, so it is not applied here.
+
+        :returns: Raw ``c_min`` column, shape ``(...,)``.
+        """
+        return x[..., self._c_min_idx] * c_max_raw
+
+
+class ABCDConfigScaler(ABCDBaseConfigScaler):
     """
     Normalise and denormalise ABCD config tensors feature-wise to ``[0, 1]``.
 
@@ -80,11 +148,10 @@ class ABCDConfigScaler:
 
     def __init__(self, n_max: int = 10_000) -> None:
         """Initialise the scaler, building lo/hi tensors from :func:`abcd_param_bounds`."""
+        super().__init__()
         bounds = abcd_param_bounds(n_max)
         self._lo = torch.tensor([bounds[k][0] for k in ABCD_CONFIG_KEYS], dtype=torch.float32)
         self._hi = torch.tensor([bounds[k][1] for k in ABCD_CONFIG_KEYS], dtype=torch.float32)
-        self._c_min_idx = ABCD_CONFIG_KEYS.index("c_min")
-        self._c_max_idx = ABCD_CONFIG_KEYS.index("c_max")
 
     def transform(self, x: Tensor) -> Tensor:
         """
@@ -95,8 +162,7 @@ class ABCDConfigScaler:
         :returns: Normalised tensor of the same shape.
         """
         out = (x - self._lo) / (self._hi - self._lo)
-        c_max_raw = x[..., self._c_max_idx].clamp(min=1.0)
-        out[..., self._c_min_idx] = x[..., self._c_min_idx] / c_max_raw
+        out[..., self._c_min_idx] = self._scale_c_min(x)
         return out
 
     def denormalise(self, x: Tensor) -> Tensor:
@@ -117,27 +183,8 @@ class ABCDConfigScaler:
         lin = x * (hi - lo) + lo
         cols = list(lin.unbind(dim=-1))
         # c_max must already be in its final (raw) scale before c_min can be recovered from it.
-        cols[self._c_min_idx] = x[..., self._c_min_idx] * cols[self._c_max_idx]
+        cols[self._c_min_idx] = self._unscale_c_min(x, cols[self._c_max_idx])
         return torch.stack(cols, dim=-1)
-
-    def inverse_transform(self, x: Tensor) -> Tensor:
-        """
-        Recover the original scale from a normalised tensor.
-
-        Integer-valued features (indices :data:`ABCD_INT_FEATURE_INDICES`) are rounded to the
-        nearest whole number after the linear inverse map.  The tensor dtype remains ``float32``.
-
-        :param x: Normalised float tensor of shape ``(..., 9)``.
-
-        :returns: Tensor in the original feature scale.
-        """
-        out = self.denormalise(x)
-        out[..., ABCD_INT_FEATURE_INDICES] = out[..., ABCD_INT_FEATURE_INDICES].round()
-        return out
-
-    def __call__(self, x: Tensor) -> Tensor:
-        """Apply :meth:`transform`."""
-        return self.transform(x)
 
 
 def abcd_nmax_bounds(n_max: int = 10_000) -> dict[str, tuple[float, float]]:
@@ -172,7 +219,7 @@ def abcd_nmax_bounds(n_max: int = 10_000) -> dict[str, tuple[float, float]]:
     }
 
 
-class ABCDNMaxConfigScaler:
+class ABCDNMaxConfigScaler(ABCDBaseConfigScaler):
     """
     Normalise and denormalise ABCD config tensors feature-wise to ``[0, 1]``.
 
@@ -181,7 +228,9 @@ class ABCDNMaxConfigScaler:
     as a baseline. Every feature -- including ``c_min`` -- uses the linear map from
     :func:`abcd_nmax_bounds`, so ``c_min``, ``c_max``, ``d_min``, ``d_max`` and ``nout`` all divide
     by ``n_max`` rather than by per-feature maxima or a per-graph anchor. Unlike the current
-    :class:`ABCDConfigScaler`, ``c_min`` is *not* rescaled as ``c_min / c_max``.
+    :class:`ABCDConfigScaler`, ``c_min`` is *not* rescaled as ``c_min / c_max`` -- the
+    :meth:`~ABCDBaseConfigScaler._scale_c_min`/:meth:`~ABCDBaseConfigScaler._unscale_c_min` helpers
+    are therefore unused here.
 
     The inverse is exact (linear map), making this usable at inference time to recover
     human-readable configs from model output. :meth:`denormalise` provides the differentiable
@@ -193,6 +242,7 @@ class ABCDNMaxConfigScaler:
 
     def __init__(self, n_max: int = 10_000) -> None:
         """Initialise the scaler, building lo/hi tensors from :func:`abcd_nmax_bounds`."""
+        super().__init__()
         bounds = abcd_nmax_bounds(n_max)
         self._lo = torch.tensor([bounds[k][0] for k in ABCD_CONFIG_KEYS], dtype=torch.float32)
         self._hi = torch.tensor([bounds[k][1] for k in ABCD_CONFIG_KEYS], dtype=torch.float32)
@@ -224,31 +274,12 @@ class ABCDNMaxConfigScaler:
         hi = self._hi.to(x.device)
         return x * (hi - lo) + lo
 
-    def inverse_transform(self, x: Tensor) -> Tensor:
-        """
-        Recover the original scale from a normalised tensor.
-
-        Integer-valued features (indices :data:`ABCD_INT_FEATURE_INDICES`) are rounded to the
-        nearest whole number after the linear inverse map.  The tensor dtype remains ``float32``.
-
-        :param x: Normalised float tensor of shape ``(..., 9)``.
-
-        :returns: Tensor in the original feature scale.
-        """
-        out = self.denormalise(x)
-        out[..., ABCD_INT_FEATURE_INDICES] = out[..., ABCD_INT_FEATURE_INDICES].round()
-        return out
-
-    def __call__(self, x: Tensor) -> Tensor:
-        """Apply :meth:`transform`."""
-        return self.transform(x)
-
 
 #: Size-like features scaled as ``log1p(x) / log1p(n)`` by :class:`ABCDLogConfigScaler`.
 _LOG_N_RELATIVE_KEYS: tuple[str, ...] = ("c_max", "d_min", "d_max", "nout")
 
 
-class ABCDLogConfigScaler:
+class ABCDLogConfigScaler(ABCDBaseConfigScaler):
     """
     Normalise ABCD config tensors to ``[0, 1]``, log-compressing size-like features against `n`.
 
@@ -266,6 +297,7 @@ class ABCDLogConfigScaler:
 
     def __init__(self, n_max: int = 10_000) -> None:
         """Initialise the scaler, caching feature indices and the linear bounds it still uses."""
+        super().__init__()
         self._n_max = float(n_max)
         self._log_n_max = math.log1p(self._n_max)
         bounds = abcd_param_bounds(n_max)
@@ -274,8 +306,6 @@ class ABCDLogConfigScaler:
         self._linear_lo = torch.tensor([bounds[k][0] for k in linear_keys], dtype=torch.float32)
         self._linear_hi = torch.tensor([bounds[k][1] for k in linear_keys], dtype=torch.float32)
         self._n_idx = ABCD_CONFIG_KEYS.index("n")
-        self._c_min_idx = ABCD_CONFIG_KEYS.index("c_min")
-        self._c_max_idx = ABCD_CONFIG_KEYS.index("c_max")
         self._log_indices = [ABCD_CONFIG_KEYS.index(k) for k in _LOG_N_RELATIVE_KEYS]
 
     def transform(self, x: Tensor) -> Tensor:
@@ -298,8 +328,7 @@ class ABCDLogConfigScaler:
             x[..., self._log_indices].clamp(min=0.0)
         ) / log_n.unsqueeze(-1)
 
-        c_max_raw = x[..., self._c_max_idx].clamp(min=1.0)
-        out[..., self._c_min_idx] = x[..., self._c_min_idx] / c_max_raw
+        out[..., self._c_min_idx] = self._scale_c_min(x)
         return out
 
     def denormalise(self, x: Tensor) -> Tensor:
@@ -326,32 +355,11 @@ class ABCDLogConfigScaler:
             cols[i] = lin[..., j]
         for j, i in enumerate(self._log_indices):
             cols[i] = logs[..., j]
-        cols[self._c_min_idx] = x[..., self._c_min_idx] * cols[self._c_max_idx].clamp(min=1.0)
+        cols[self._c_min_idx] = self._unscale_c_min(x, cols[self._c_max_idx].clamp(min=1.0))
         return torch.stack(cols, dim=-1)
 
-    def inverse_transform(self, x: Tensor) -> Tensor:
-        """
-        Recover the original scale from a normalised tensor.
 
-        `n` is denormalised first since every log-relative feature's inverse depends on it, and
-        `c_max` (also log-relative) before `c_min`, which is recovered as a fraction of it.
-        Integer-valued features (:data:`ABCD_INT_FEATURE_INDICES`) are rounded to the nearest
-        whole number after the inverse map. The tensor dtype remains ``float32``.
-
-        :param x: Normalised float tensor of shape ``(..., 9)``.
-
-        :returns: Tensor in the original feature scale.
-        """
-        out = self.denormalise(x)
-        out[..., ABCD_INT_FEATURE_INDICES] = out[..., ABCD_INT_FEATURE_INDICES].round()
-        return out
-
-    def __call__(self, x: Tensor) -> Tensor:
-        """Apply :meth:`transform`."""
-        return self.transform(x)
-
-
-class ABCDRelativeConfigScaler:
+class ABCDRelativeConfigScaler(ABCDBaseConfigScaler):
     """
     Normalise ABCD config tensors to ``[0, 1]`` using hard-constraint anchors.
 
@@ -374,6 +382,7 @@ class ABCDRelativeConfigScaler:
 
     def __init__(self, n_max: int = 10_000) -> None:
         """Initialise the scaler, caching feature indices and the linear bounds it still uses."""
+        super().__init__()
         bounds = abcd_param_bounds(n_max)
         linear_keys = ("t1", "t2", "xi")
         self._linear_indices = [ABCD_CONFIG_KEYS.index(k) for k in linear_keys]
@@ -381,8 +390,6 @@ class ABCDRelativeConfigScaler:
         self._linear_hi = torch.tensor([bounds[k][1] for k in linear_keys], dtype=torch.float32)
         self._n_idx = ABCD_CONFIG_KEYS.index("n")
         self._n_lo, self._n_hi = bounds["n"]
-        self._c_min_idx = ABCD_CONFIG_KEYS.index("c_min")
-        self._c_max_idx = ABCD_CONFIG_KEYS.index("c_max")
         self._d_min_idx = ABCD_CONFIG_KEYS.index("d_min")
         self._d_max_idx = ABCD_CONFIG_KEYS.index("d_max")
         self._nout_idx = ABCD_CONFIG_KEYS.index("nout")
@@ -415,8 +422,7 @@ class ABCDRelativeConfigScaler:
             n_raw
         )
 
-        c_max_raw = x[..., self._c_max_idx].clamp(min=1.0)
-        out[..., self._c_min_idx] = x[..., self._c_min_idx] / c_max_raw
+        out[..., self._c_min_idx] = self._scale_c_min(x)
         return out
 
     def denormalise(self, x: Tensor) -> Tensor:
@@ -446,30 +452,8 @@ class ABCDRelativeConfigScaler:
         cols[self._d_max_idx] = d_max_raw
         cols[self._d_min_idx] = d_max_raw.clamp(min=2.0) ** x[..., self._d_min_idx]
         cols[self._nout_idx] = torch.expm1(x[..., self._nout_idx] * torch.log1p(n_raw))
-        cols[self._c_min_idx] = x[..., self._c_min_idx] * c_max_raw.clamp(min=1.0)
+        cols[self._c_min_idx] = self._unscale_c_min(x, c_max_raw.clamp(min=1.0))
         return torch.stack(cols, dim=-1)
-
-    def inverse_transform(self, x: Tensor) -> Tensor:
-        """
-        Recover the original scale from a normalised tensor.
-
-        `n` is denormalised first since every relative feature's inverse depends on it, then
-        `d_max` before `d_min` (recovered as ``d_max ** s``) and `c_max` before `c_min`
-        (recovered as a fraction of it). Integer-valued features
-        (:data:`ABCD_INT_FEATURE_INDICES`) are rounded to the nearest whole number after the
-        inverse map. The tensor dtype remains ``float32``.
-
-        :param x: Normalised float tensor of shape ``(..., 9)``.
-
-        :returns: Tensor in the original feature scale.
-        """
-        out = self.denormalise(x)
-        out[..., ABCD_INT_FEATURE_INDICES] = out[..., ABCD_INT_FEATURE_INDICES].round()
-        return out
-
-    def __call__(self, x: Tensor) -> Tensor:
-        """Apply :meth:`transform`."""
-        return self.transform(x)
 
 
 class ABCDConfigToTensor(BaseTransform):

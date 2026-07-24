@@ -4,6 +4,7 @@ from dcba.dataset.dcba_dataset import ABCDDataset
 from dcba.dataset.scalers import (
     ABCD_CONFIG_KEYS,
     ABCD_INT_FEATURE_INDICES,
+    ABCDBaseConfigScaler,
     ABCDConfigScaler,
     ABCDConfigSchema,
     ABCDConfigToTensor,
@@ -17,6 +18,7 @@ from dcba.dataset.transforms import CommunityToSize, ConstantNodeFeatures
 
 __all__ = [
     "ABCDDataset",
+    "ABCDBaseConfigScaler",
     "ABCDConfigSchema",
     "ABCDConfigToTensor",
     "ABCDConfigScaler",
