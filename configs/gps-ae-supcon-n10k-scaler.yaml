@@ -14,8 +14,6 @@ data:
     # ABCDNMaxConfigScaler's docstring). Only intended difference from the base-scaler run -- keep
     # everything else in sync so the comparison isolates the scaler change.
     name: ABCDNMaxConfigScaler
-    args:
-      n_max: 10000
   val_ratio: 0.10
   test_ratio: 0.10
   batch_size: 32

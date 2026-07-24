@@ -1,7 +1,6 @@
 """Scalers and theta-vector transforms for ABCD config records."""
 
 import math
-from functools import lru_cache
 
 import torch
 from dcba_data_set.graph_io.data_models import DCBAInstanceConfig
@@ -34,57 +33,35 @@ class ABCDConfigSchema(BaseModel):
     nout: float
 
 
-@lru_cache()
-def abcd_param_bounds(n_max: int = 10_000) -> dict[str, tuple[float, float]]:
-    """
-    Return per-feature ``(lo, hi)`` bounds for ABCD config normalisation.
+#: Per-feature ``(lo, hi)`` bounds for ABCD config normalisation. ``t1``/``t2`` >= 1 and ``xi``
+#: in ``[0, 1]`` are hard generator constraints; the rest -- including ``t1``/``t2``'s upper
+#: bound -- are chosen ceilings, several observed on ``abcd-big``. ``c_min``'s bound is
+#: ``[0, 1]`` since :class:`ABCDConfigScaler` scales it as a fraction of ``c_max``.
+ABCD_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
+    "n": (1.0, 10_000.0),  # @assert n > 0; upper bound is a chosen ceiling
+    "t1": (1.0, 5.0),  # @assert alpha >= 1; upper bound is a chosen ceiling
+    "t2": (1.0, 5.0),  # @assert alpha >= 1; upper bound is a chosen ceiling
+    "xi": (0.0, 1.0),  # 0 <= xi <= 1 (hard constraint)
+    "c_min": (0.0, 1.0),  # fraction of c_max -- see ABCDConfigScaler
+    "c_max": (1.0, 6_000.0),  # observed max ~4938 on abcd-big
+    "d_min": (1.0, 100.0),  # observed max ~50 on abcd-big
+    "d_max": (1.0, 6_000.0),  # observed max ~4993 on abcd-big
+    "nout": (0.0, 700.0),  # observed max ~492 on abcd-big
+}
 
-    ``t1``/``t2`` >= 1 and ``xi`` in ``[0, 1]`` are hard generator constraints; the rest are
-    per-feature maxima observed on ``abcd-big``. ``c_min``'s bound is ``[0, 1]`` since
-    :class:`ABCDConfigScaler` scales it as a fraction of ``c_max``.
-
-    :param n_max: Maximum graph size in the dataset; used only for the ``n`` bound.
-
-    :returns: Dict mapping each key in :data:`ABCD_CONFIG_KEYS` to ``(lo, hi)``.
-    """
-    n = float(n_max)
-    return {
-        "n": (1.0, n),  # @assert n > 0
-        "t1": (1.0, 5.0),  # @assert α >= 1
-        "t2": (1.0, 5.0),  # @assert α >= 1
-        "xi": (0.0, 1.0),  # 0 ≤ ξ ≤ 1 (hard constraint)
-        "c_min": (0.0, 1.0),  # fraction of c_max -- see ABCDConfigScaler
-        "c_max": (1.0, 6_000.0),  # observed max ~4938 on abcd-big
-        "d_min": (1.0, 100.0),  # observed max ~50 on abcd-big
-        "d_max": (1.0, 6_000.0),  # observed max ~4993 on abcd-big
-        "nout": (0.0, 700.0),  # observed max ~492 on abcd-big
-    }
-
-
-@lru_cache()
-def abcd_nmax_bounds(n_max: int = 10_000) -> dict[str, tuple[float, float]]:
-    """
-    Return per-feature ``(lo, hi)`` bounds for :class:`ABCDNMaxConfigScaler`.
-
-    Every size feature (``n``, ``c_min``, ``c_max``, ``d_min``, ``d_max``, ``nout``) shares the
-    ``n_max`` upper bound; ``t1``, ``t2``, ``xi`` keep their own hard-constraint bounds.
-
-    :param n_max: Maximum graph size in the dataset; upper bound for all size-like features.
-
-    :returns: Dict mapping each key in :data:`ABCD_CONFIG_KEYS` to ``(lo, hi)``.
-    """
-    n = float(n_max)
-    return {
-        "n": (1.0, n),  # @assert n > 0
-        "t1": (1.0, 5.0),  # @assert alpha >= 1
-        "t2": (1.0, 5.0),  # @assert alpha >= 1
-        "xi": (0.0, 1.0),  # 0 <= xi <= 1 (hard constraint)
-        "c_min": (1.0, n),  # >= 1; c_min <= c_max <= n
-        "c_max": (1.0, n),  # c_max <= n (ABCDConfig validator)
-        "d_min": (1.0, n),  # @assert 1 <= d_min
-        "d_max": (1.0, n),  # @assert d_max >= d_min
-        "nout": (0.0, n),  # 0 <= nout <= n (ABCDConfig validator)
-    }
+#: Per-feature ``(lo, hi)`` bounds for :class:`ABCDNMaxConfigScaler`: every size feature shares
+#: a ``10_000`` upper bound (a chosen ceiling); ``t1``/``t2``/``xi`` keep their own bounds.
+ABCD_NMAX_BOUNDS: dict[str, tuple[float, float]] = {
+    "n": (1.0, 10_000.0),  # @assert n > 0
+    "t1": (1.0, 5.0),  # @assert alpha >= 1
+    "t2": (1.0, 5.0),  # @assert alpha >= 1
+    "xi": (0.0, 1.0),  # 0 <= xi <= 1 (hard constraint)
+    "c_min": (1.0, 10_000.0),  # >= 1; c_min <= c_max <= n
+    "c_max": (1.0, 10_000.0),  # c_max <= n (ABCDConfig validator)
+    "d_min": (1.0, 10_000.0),  # @assert 1 <= d_min
+    "d_max": (1.0, 10_000.0),  # @assert d_max >= d_min
+    "nout": (0.0, 10_000.0),  # 0 <= nout <= n (ABCDConfig validator)
+}
 
 
 class ABCDBaseConfigScaler:
@@ -157,18 +134,19 @@ class ABCDConfigScaler(ABCDBaseConfigScaler):
     """
     Normalise and denormalise ABCD config tensors feature-wise to ``[0, 1]``.
 
-    Linear (min-max) map per feature from :func:`abcd_param_bounds`, except ``c_min``, scaled as
+    Linear (min-max) map per feature from :data:`ABCD_PARAM_BOUNDS`, except ``c_min``, scaled as
     ``c_min / c_max``. The inverse is exact.
-
-    :param n_max: Maximum graph size in the dataset. Defaults to 10 000.
     """
 
-    def __init__(self, n_max: int = 10_000) -> None:
-        """Initialise the scaler, building lo/hi tensors from :func:`abcd_param_bounds`."""
+    def __init__(self) -> None:
+        """Initialise the scaler, building lo/hi tensors from :data:`ABCD_PARAM_BOUNDS`."""
         super().__init__()
-        bounds = abcd_param_bounds(n_max)
-        self._lo = torch.tensor([bounds[k][0] for k in ABCD_CONFIG_KEYS], dtype=torch.float32)
-        self._hi = torch.tensor([bounds[k][1] for k in ABCD_CONFIG_KEYS], dtype=torch.float32)
+        self._lo = torch.tensor(
+            [ABCD_PARAM_BOUNDS[k][0] for k in ABCD_CONFIG_KEYS], dtype=torch.float32
+        )
+        self._hi = torch.tensor(
+            [ABCD_PARAM_BOUNDS[k][1] for k in ABCD_CONFIG_KEYS], dtype=torch.float32
+        )
 
     def transform(self, x: Tensor) -> Tensor:
         """
@@ -203,20 +181,21 @@ class ABCDConfigScaler(ABCDBaseConfigScaler):
 
 class ABCDNMaxConfigScaler(ABCDBaseConfigScaler):
     """
-    Legacy linear scaler: every feature, including ``c_min``, divides by a shared ``n_max``.
+    Legacy linear scaler: every feature, including ``c_min``, divides by a shared ``10_000``.
 
-    Uses :func:`abcd_nmax_bounds`. ``c_min`` is not a ``c_min/c_max`` ratio here, so the base
+    Uses :data:`ABCD_NMAX_BOUNDS`. ``c_min`` is not a ``c_min/c_max`` ratio here, so the base
     class's ``_scale_c_min``/``_unscale_c_min`` helpers are unused. The inverse is exact.
-
-    :param n_max: Maximum graph size in the dataset. Defaults to 10 000.
     """
 
-    def __init__(self, n_max: int = 10_000) -> None:
-        """Initialise the scaler, building lo/hi tensors from :func:`abcd_nmax_bounds`."""
+    def __init__(self) -> None:
+        """Initialise the scaler, building lo/hi tensors from :data:`ABCD_NMAX_BOUNDS`."""
         super().__init__()
-        bounds = abcd_nmax_bounds(n_max)
-        self._lo = torch.tensor([bounds[k][0] for k in ABCD_CONFIG_KEYS], dtype=torch.float32)
-        self._hi = torch.tensor([bounds[k][1] for k in ABCD_CONFIG_KEYS], dtype=torch.float32)
+        self._lo = torch.tensor(
+            [ABCD_NMAX_BOUNDS[k][0] for k in ABCD_CONFIG_KEYS], dtype=torch.float32
+        )
+        self._hi = torch.tensor(
+            [ABCD_NMAX_BOUNDS[k][1] for k in ABCD_CONFIG_KEYS], dtype=torch.float32
+        )
 
     def transform(self, x: Tensor) -> Tensor:
         """
@@ -248,22 +227,22 @@ class ABCDLogConfigScaler(ABCDBaseConfigScaler):
     Log-compresses size-like features against `n`.
 
     ``c_max``, ``d_min``, ``d_max``, ``nout`` as ``log1p(x) / log1p(n)``; `n` as
-    ``log1p(n) / log1p(n_max)``. `t1`, `t2`, `xi`, `c_min` keep :class:`ABCDConfigScaler`'s
+    ``log1p(n) / log1p(10_000)``. `t1`, `t2`, `xi`, `c_min` keep :class:`ABCDConfigScaler`'s
     treatment. The inverse is exact.
-
-    :param n_max: Maximum graph size in the dataset, used only to scale `n`. Defaults to 10 000.
     """
 
-    def __init__(self, n_max: int = 10_000) -> None:
+    def __init__(self) -> None:
         """Initialise the scaler, caching feature indices and the linear bounds it still uses."""
         super().__init__()
-        self._n_max = float(n_max)
-        self._log_n_max = math.log1p(self._n_max)
-        bounds = abcd_param_bounds(n_max)
+        self._log_n_max = math.log1p(10_000.0)
         linear_keys = ("t1", "t2", "xi")
         self._linear_indices = [ABCD_CONFIG_KEYS.index(k) for k in linear_keys]
-        self._linear_lo = torch.tensor([bounds[k][0] for k in linear_keys], dtype=torch.float32)
-        self._linear_hi = torch.tensor([bounds[k][1] for k in linear_keys], dtype=torch.float32)
+        self._linear_lo = torch.tensor(
+            [ABCD_PARAM_BOUNDS[k][0] for k in linear_keys], dtype=torch.float32
+        )
+        self._linear_hi = torch.tensor(
+            [ABCD_PARAM_BOUNDS[k][1] for k in linear_keys], dtype=torch.float32
+        )
         self._n_idx = ABCD_CONFIG_KEYS.index("n")
         self._log_indices = [ABCD_CONFIG_KEYS.index(k) for k in _LOG_N_RELATIVE_KEYS]
 
@@ -328,20 +307,21 @@ class ABCDRelativeConfigScaler(ABCDBaseConfigScaler):
     - `n`, `t1`, `t2`, `xi`, `c_min` keep :class:`ABCDConfigScaler`'s treatment.
 
     The inverse is exact: `n`, then `d_max` before `d_min`, then `c_max` before `c_min`.
-
-    :param n_max: Maximum graph size in the dataset, used only for `n`. Defaults to 10 000.
     """
 
-    def __init__(self, n_max: int = 10_000) -> None:
+    def __init__(self) -> None:
         """Initialise the scaler, caching feature indices and the linear bounds it still uses."""
         super().__init__()
-        bounds = abcd_param_bounds(n_max)
         linear_keys = ("t1", "t2", "xi")
         self._linear_indices = [ABCD_CONFIG_KEYS.index(k) for k in linear_keys]
-        self._linear_lo = torch.tensor([bounds[k][0] for k in linear_keys], dtype=torch.float32)
-        self._linear_hi = torch.tensor([bounds[k][1] for k in linear_keys], dtype=torch.float32)
+        self._linear_lo = torch.tensor(
+            [ABCD_PARAM_BOUNDS[k][0] for k in linear_keys], dtype=torch.float32
+        )
+        self._linear_hi = torch.tensor(
+            [ABCD_PARAM_BOUNDS[k][1] for k in linear_keys], dtype=torch.float32
+        )
         self._n_idx = ABCD_CONFIG_KEYS.index("n")
-        self._n_lo, self._n_hi = bounds["n"]
+        self._n_lo, self._n_hi = ABCD_PARAM_BOUNDS["n"]
         self._d_min_idx = ABCD_CONFIG_KEYS.index("d_min")
         self._d_max_idx = ABCD_CONFIG_KEYS.index("d_max")
         self._nout_idx = ABCD_CONFIG_KEYS.index("nout")

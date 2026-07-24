@@ -11,8 +11,6 @@ data:
   node_transform: CommunityToSize
   scaler:
     name: ABCDConfigScaler
-    args:
-      n_max: 10000
   val_ratio: 0.10
   test_ratio: 0.10
   batch_size: 32

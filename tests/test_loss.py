@@ -518,7 +518,7 @@ class TestABCDConstraintPenaltyLossOrdering:
 
         raw = self._valid_raw()
         for scaler_cls in (ABCDConfigScaler, ABCDRelativeConfigScaler):
-            scaler = scaler_cls(n_max=10_000)
+            scaler = scaler_cls()
             scaled = scaler.transform(raw)
             loss = self._loss_with(scaler)(scaled, scaled)
             assert loss.item() == 0.0, scaler_cls.__name__
@@ -527,7 +527,7 @@ class TestABCDConstraintPenaltyLossOrdering:
         """A prediction that decodes to raw d_min > d_max must be penalised."""
         from dcba.dataset.scalers import ABCDConfigScaler
 
-        scaler = ABCDConfigScaler(n_max=10_000)
+        scaler = ABCDConfigScaler()
         violating_raw = self._valid_raw()
         violating_raw[:, 6] = 600.0  # d_min 600 > d_max 500/80: genuine constraint violation
         scaled = scaler.transform(violating_raw)
@@ -538,7 +538,7 @@ class TestABCDConstraintPenaltyLossOrdering:
         """Violations are normalised by raw n, so the hinge cannot blow up with graph size."""
         from dcba.dataset.scalers import ABCDConfigScaler
 
-        scaler = ABCDConfigScaler(n_max=10_000)
+        scaler = ABCDConfigScaler()
         violating_raw = self._valid_raw()
         violating_raw[:, 7] = 9_000.0  # d_max far above n=5000/8000
         scaled = scaler.transform(violating_raw)
@@ -549,7 +549,7 @@ class TestABCDConstraintPenaltyLossOrdering:
         """Gradients must flow through denormalise back to the prediction."""
         from dcba.dataset.scalers import ABCDRelativeConfigScaler
 
-        scaler = ABCDRelativeConfigScaler(n_max=10_000)
+        scaler = ABCDRelativeConfigScaler()
         scaled = scaler.transform(self._valid_raw())
         x_hat = scaled.clone().requires_grad_(True)
         loss = self._loss_with(scaler)(x_hat, scaled)
@@ -572,9 +572,9 @@ class TestABCDConstraintPenaltyLossOrdering:
 
         torch.manual_seed(0)
         x_hat = torch.randn(64, 9) * 0.3  # init-like: small, partly negative
-        target = ABCDConfigScaler(n_max=10_000).transform(self._valid_raw()).repeat(32, 1)
+        target = ABCDConfigScaler().transform(self._valid_raw()).repeat(32, 1)
         for scaler_cls in (ABCDConfigScaler, ABCDLogConfigScaler, ABCDRelativeConfigScaler):
-            scaler = scaler_cls(n_max=10_000)
+            scaler = scaler_cls()
             target = scaler.transform(self._valid_raw()).repeat(32, 1)
             loss = self._loss_with(scaler)(x_hat, target)
             assert loss.item() < 100.0, f"{scaler_cls.__name__}: {loss.item()}"
@@ -588,7 +588,7 @@ class TestABCDConstraintPenaltyLossOrdering:
         """
         from dcba.dataset.scalers import ABCDConfigScaler
 
-        scaler = ABCDConfigScaler(n_max=10_000)
+        scaler = ABCDConfigScaler()
         target = scaler.transform(self._valid_raw())
         x_hat = target.clone()
         x_hat[:, 0] = -0.05  # predicted n denormalises negative
