@@ -13,7 +13,7 @@ ABCD_CONFIG_KEYS: list[str] = ["n", "t1", "t2", "xi", "c_min", "c_max", "d_min",
 
 ABCD_INT_FEATURE_INDICES: list[int] = [0, 4, 5, 6, 7, 8]
 
-_LOG_N_RELATIVE_KEYS: tuple[str, ...] = ("c_max", "d_min", "d_max", "nout")
+_LOG_N_RELATIVE_KEYS: tuple[str, ...] = ("c_max", "d_max", "nout")
 
 
 class ABCDConfigSchema(BaseModel):
@@ -226,9 +226,10 @@ class ABCDLogConfigScaler(ABCDBaseConfigScaler):
     """
     Log-compresses size-like features against `n`.
 
-    ``c_max``, ``d_min``, ``d_max``, ``nout`` as ``log1p(x) / log1p(n)``; `n` as
-    ``log1p(n) / log1p(10_000)``. `t1`, `t2`, `xi`, `c_min` keep :class:`ABCDConfigScaler`'s
-    treatment. The inverse is exact.
+    ``c_max``, ``d_max``, ``nout`` as ``log1p(x) / log1p(n)``; `n` as
+    ``log1p(n) / log1p(10_000)``; `d_min` as ``log(d_min) / log(d_max)`` (its true constraint
+    partner). `t1`, `t2`, `xi`, `c_min` keep :class:`ABCDConfigScaler`'s treatment. The inverse
+    is exact.
     """
 
     def __init__(self) -> None:
@@ -244,6 +245,8 @@ class ABCDLogConfigScaler(ABCDBaseConfigScaler):
             [ABCD_PARAM_BOUNDS[k][1] for k in linear_keys], dtype=torch.float32
         )
         self._n_idx = ABCD_CONFIG_KEYS.index("n")
+        self._d_min_idx = ABCD_CONFIG_KEYS.index("d_min")
+        self._d_max_idx = ABCD_CONFIG_KEYS.index("d_max")
         self._log_indices = [ABCD_CONFIG_KEYS.index(k) for k in _LOG_N_RELATIVE_KEYS]
 
     def transform(self, x: Tensor) -> Tensor:
@@ -265,6 +268,10 @@ class ABCDLogConfigScaler(ABCDBaseConfigScaler):
         out[..., self._log_indices] = torch.log1p(
             x[..., self._log_indices].clamp(min=0.0)
         ) / log_n.unsqueeze(-1)
+        # d_max clamped to >= 2 so log(d_max) > 0; only reachable on degenerate raw configs.
+        out[..., self._d_min_idx] = torch.log(x[..., self._d_min_idx].clamp(min=1.0)) / torch.log(
+            x[..., self._d_max_idx].clamp(min=2.0)
+        )
 
         out[..., self._c_min_idx] = self._scale_c_min(x)
         return out
@@ -292,6 +299,7 @@ class ABCDLogConfigScaler(ABCDBaseConfigScaler):
             cols[i] = lin[..., j]
         for j, i in enumerate(self._log_indices):
             cols[i] = logs[..., j]
+        cols[self._d_min_idx] = cols[self._d_max_idx].clamp(min=2.0) ** x[..., self._d_min_idx]
         cols[self._c_min_idx] = self._unscale_c_min(x, cols[self._c_max_idx].clamp(min=1.0))
         return torch.stack(cols, dim=-1)
 

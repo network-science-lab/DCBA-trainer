@@ -131,6 +131,16 @@ class TestABCDLogConfigScalerRange:
         expected = raw[:, c_min_idx] / raw[:, c_max_idx]
         assert torch.allclose(scaled[:, c_min_idx], expected, atol=1e-6)
 
+    def test_d_min_is_log_exponent_of_d_max(self) -> None:
+        """d_min is anchored on d_max (its true constraint partner), not on n."""
+        scaler = ABCDLogConfigScaler()
+        raw = _raw_batch()
+        scaled = scaler.transform(raw)
+        d_min = raw[:, ABCD_CONFIG_KEYS.index("d_min")]
+        d_max = raw[:, ABCD_CONFIG_KEYS.index("d_max")]
+        expected = torch.log(d_min) / torch.log(d_max)
+        assert torch.allclose(scaled[:, ABCD_CONFIG_KEYS.index("d_min")], expected, atol=1e-6)
+
 
 class TestABCDLogConfigScalerRelativeToOwnN:
     """The log-relative features must depend on each graph's own n, not a fixed bound."""
