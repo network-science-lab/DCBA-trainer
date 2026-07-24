@@ -160,22 +160,23 @@ def _attach_ordering_scaler(loss: nn.Module, scaler: ABCDConfigScaler | None) ->
     """
     Attach ``scaler`` to a constraint loss that compares orderings in raw scale.
 
-    No-op unless ``loss`` is an :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss` with
-    ``ordering_penalties="raw"`` -- that mode denormalises predictions through the attached
-    scaler (see the loss docstring).
+    No-op unless ``loss`` is an :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`, which
+    always denormalises predictions through the attached scaler (see the loss docstring). Fails
+    fast at build time rather than at the first forward pass when no scaler is available.
 
     :param loss: The regression loss instance built by :func:`_build_loss`.
     :param scaler: The scaler already built for the data pipeline (see :func:`_build_scaler`) --
         pass the same instance the datamodule uses rather than rebuilding one, so the loss's
         raw-space denormalisation can never silently drift from the pipeline's scaling.
     """
-    if isinstance(loss, ABCDConstraintPenaltyLoss) and loss.ordering_mode == "raw":
-        if scaler is None:
-            raise ValueError(
-                "ordering_penalties='raw' requires data.scaler to be set -- the loss "
-                "denormalises predictions through the same scaler the datamodule uses."
-            )
-        loss.set_scaler(scaler)
+    if not isinstance(loss, ABCDConstraintPenaltyLoss):
+        return
+    if scaler is None:
+        raise ValueError(
+            "ABCDConstraintPenaltyLoss requires data.scaler to be set -- it denormalises "
+            "predictions through the same scaler the datamodule uses."
+        )
+    loss.set_scaler(scaler)
 
 
 def build_supcon_wrapper(config: dict, scaler: ABCDConfigScaler | None = None) -> DCBASupConWrapper:
@@ -189,11 +190,11 @@ def build_supcon_wrapper(config: dict, scaler: ABCDConfigScaler | None = None) -
     :param config: Full resolved training config dict (as returned by
         :func:`~dcba.utils.config.load_config`), with ``config["training"]["wrapper"] ==
         "supcon"``.
-    :param scaler: Scaler to attach to the regression loss when it uses
-        ``ordering_penalties="raw"``. :func:`train` passes the same instance it already built for
-        the datamodule; external callers that have not built one (e.g.
-        ``scripts/embedding_stability.py``) may omit this, in which case one is built here from
-        ``config["data"]["scaler"]``.
+    :param scaler: Scaler to attach when the regression loss is an
+        :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss` (which always requires one).
+        :func:`train` passes the same instance it already built for the datamodule; external
+        callers that have not built one (e.g. ``scripts/embedding_stability.py``) may omit this,
+        in which case one is built here from ``config["data"]["scaler"]``.
 
     :returns: An untrained :class:`~dcba.wrappers.supcon.DCBASupConWrapper`.
     """

@@ -3,6 +3,7 @@
 import torch
 import torch.nn.functional as F
 
+from dcba.dataset.scalers import ABCDIdentityConfigScaler
 from dcba.training.loss import (
     ABCDConstraintPenaltyLoss,
     MultiPositiveSupConLoss,
@@ -382,7 +383,16 @@ class TestDirectionalLoss:
 
 
 class TestABCDConstraintPenaltyLoss:
-    """Tests for :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`."""
+    """
+    Tests for :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`.
+
+    Uses :class:`~dcba.dataset.scalers.ABCDIdentityConfigScaler` throughout: since its
+    ``denormalise`` is the identity and every fixture's ``n`` is ``<= 1``, the raw-space ordering
+    penalty here reduces to comparing the ``[0, 1]`` fixture values directly with a constant
+    scale of 1 -- exactly what these fixtures were designed to exercise. Scaler-specific raw-space
+    behaviour (per-feature bounds, log-relative features, ...) is covered by
+    :class:`TestABCDConstraintPenaltyLossOrdering` instead.
+    """
 
     def _make_valid(self, b: int = 4) -> torch.Tensor:
         """Return a valid normalised config tensor in [0, 1] satisfying ordering constraints."""
@@ -391,16 +401,22 @@ class TestABCDConstraintPenaltyLoss:
         x[:] = torch.tensor([0.5, 0.3, 0.3, 0.5, 0.1, 0.3, 0.1, 0.3, 0.2])
         return x
 
+    def _loss_with_scaler(self, **kwargs) -> ABCDConstraintPenaltyLoss:
+        """Build a loss with an ABCDIdentityConfigScaler attached (required before forward)."""
+        loss_fn = ABCDConstraintPenaltyLoss(**kwargs)
+        loss_fn.set_scaler(ABCDIdentityConfigScaler())
+        return loss_fn
+
     def test_output_is_scalar(self) -> None:
         """Loss must be a zero-dimensional scalar."""
-        loss_fn = ABCDConstraintPenaltyLoss()
+        loss_fn = self._loss_with_scaler()
         x = self._make_valid()
         loss = loss_fn(x, x)
         assert loss.ndim == 0
 
     def test_no_violation_penalty_close_to_mse(self) -> None:
         """With no constraint violations the penalty term is zero, so loss equals MSE."""
-        loss_fn = ABCDConstraintPenaltyLoss(lambda_penalty=1.0)
+        loss_fn = self._loss_with_scaler(lambda_penalty=1.0)
         x = self._make_valid()
         target = x.clone()
         target[:, 0] += 0.1
@@ -410,7 +426,7 @@ class TestABCDConstraintPenaltyLoss:
 
     def test_violation_increases_loss(self) -> None:
         """A config that violates d_min <= d_max must produce a higher loss than a valid config."""
-        loss_fn = ABCDConstraintPenaltyLoss(lambda_penalty=1.0)
+        loss_fn = self._loss_with_scaler(lambda_penalty=1.0)
         valid = self._make_valid()
         invalid = valid.clone()
         invalid[:, 6] = 0.9  # d_min > d_max (0.3)
@@ -422,7 +438,7 @@ class TestABCDConstraintPenaltyLoss:
 
     def test_c_min_c_max_ordering_not_penalised(self) -> None:
         """c_min > c_max in raw feature values must not be penalised (c_min is now a ratio)."""
-        loss_fn = ABCDConstraintPenaltyLoss(lambda_penalty=1.0)
+        loss_fn = self._loss_with_scaler(lambda_penalty=1.0)
         valid = self._make_valid()
         same_mse = valid.clone()
         same_mse[:, 4] = 0.9  # would have violated the old absolute c_min <= c_max constraint
@@ -436,7 +452,7 @@ class TestABCDConstraintPenaltyLoss:
         """Upweighting a single feature must scale exactly that feature's contribution to MSE."""
         weights = [1.0] * 9
         weights[0] = 4.0  # upweight n (idx 0)
-        loss_fn = ABCDConstraintPenaltyLoss(lambda_penalty=0.0, weights=weights)
+        loss_fn = self._loss_with_scaler(lambda_penalty=0.0, weights=weights)
         x = self._make_valid()
         target = x.clone()
         target[:, 0] += 0.1  # error only on n
@@ -447,7 +463,7 @@ class TestABCDConstraintPenaltyLoss:
 
     def test_backward_passes(self) -> None:
         """Gradients must flow back through the loss to x_hat."""
-        loss_fn = ABCDConstraintPenaltyLoss()
+        loss_fn = self._loss_with_scaler()
         x = self._make_valid().requires_grad_(True)
         loss_fn(x, self._make_valid()).backward()
         assert x.grad is not None
@@ -457,72 +473,25 @@ class TestABCDConstraintPenaltyLoss:
         x = self._make_valid()
         x[:, 6] = 0.9  # force a violation: d_min (0.9) > d_max (0.3)
         target = self._make_valid()
-        loss_low = ABCDConstraintPenaltyLoss(lambda_penalty=0.1)(x, target)
-        loss_high = ABCDConstraintPenaltyLoss(lambda_penalty=10.0)(x, target)
+        loss_low = self._loss_with_scaler(lambda_penalty=0.1)(x, target)
+        loss_high = self._loss_with_scaler(lambda_penalty=10.0)(x, target)
         assert loss_high.item() > loss_low.item()
 
-    def test_ordering_penalties_flag_disables_ordering_terms(self) -> None:
-        """With ordering_penalties=False an ordering violation adds no penalty."""
-        x = self._make_valid()
-        x[:, 6] = 0.9  # d_min (0.9) > d_max (0.3): only an ordering violation, range still ok
-        target = x.clone()  # zero MSE so any nonzero loss must come from penalties
-        loss_off = ABCDConstraintPenaltyLoss(ordering_penalties=False)(x, target)
-        loss_on = ABCDConstraintPenaltyLoss(ordering_penalties=True)(x, target)
-        assert loss_off.item() == 0.0
-        assert loss_on.item() > 0.0
-
-    def test_ordering_penalties_flag_keeps_range_penalty(self) -> None:
-        """ordering_penalties=False must not disable the [0, 1] range penalty."""
-        x = self._make_valid()
-        x[:, 7] = 1.5  # above-range violation, covers orderings under the relative scaler
-        target = x.clone()
-        loss = ABCDConstraintPenaltyLoss(ordering_penalties=False)(x, target)
-        assert loss.item() > 0.0
-
-    def test_relative_scaled_valid_configs_get_zero_penalty_without_ordering_terms(self) -> None:
-        """
-        Valid configs under ABCDRelativeConfigScaler carry no penalty without ordering terms.
-
-        The default (ordering_penalties=True) falsely penalises them instead, since that
-        scaler's features live on incomparable scales -- the reason the flag exists.
-        """
-        from dcba.dataset.scalers import ABCDRelativeConfigScaler
-
-        raw = torch.tensor(
-            [
-                # constraint-respecting configs where log(d_min)/log(d_max) > d_max/n
-                [5000.0, 2.5, 1.8, 0.3, 20.0, 300.0, 2.0, 50.0, 15.0],
-                [8000.0, 2.2, 1.5, 0.1, 5.0, 900.0, 3.0, 80.0, 200.0],
-            ]
-        )
-        scaled = ABCDRelativeConfigScaler(n_max=10_000).transform(raw)
-        loss_off = ABCDConstraintPenaltyLoss(ordering_penalties=False)(scaled, scaled)
-        loss_on = ABCDConstraintPenaltyLoss(ordering_penalties=True)(scaled, scaled)
-        assert loss_off.item() == 0.0
-        assert loss_on.item() > 0.0
-
-    def test_ordering_penalties_rejects_unknown_mode(self) -> None:
-        """A typo'd mode string must fail fast at construction, not silently at forward time."""
+    def test_requires_scaler(self) -> None:
+        """Without an attached scaler, forward must raise -- a scaler is now always required."""
         import pytest
 
-        with pytest.raises(ValueError):
-            ABCDConstraintPenaltyLoss(ordering_penalties="rawr")
-
-    def test_raw_mode_requires_scaler(self) -> None:
-        """ordering_penalties='raw' without an attached scaler must raise at forward time."""
-        import pytest
-
-        loss_fn = ABCDConstraintPenaltyLoss(ordering_penalties="raw")
+        loss_fn = ABCDConstraintPenaltyLoss()
         x = self._make_valid()
         with pytest.raises(RuntimeError):
             loss_fn(x, x)
 
 
-class TestABCDConstraintPenaltyLossRawMode:
-    """Raw-space ordering penalties (`ordering_penalties='raw'`) under both scalers."""
+class TestABCDConstraintPenaltyLossOrdering:
+    """Raw-space ordering penalties under multiple scalers."""
 
     def _loss_with(self, scaler) -> ABCDConstraintPenaltyLoss:
-        loss_fn = ABCDConstraintPenaltyLoss(ordering_penalties="raw")
+        loss_fn = ABCDConstraintPenaltyLoss()
         loss_fn.set_scaler(scaler)
         return loss_fn
 
@@ -538,9 +507,12 @@ class TestABCDConstraintPenaltyLossRawMode:
 
     def test_no_false_penalty_on_valid_configs_any_scaler(self) -> None:
         """
-        Regression test: valid configs yield zero penalty in raw mode under both scalers.
+        Regression test: valid configs yield zero penalty under both scalers.
 
-        This is the exact configuration that the legacy scaled mode falsely penalises.
+        Comparing these same configs on the scaled values directly (the old, now-removed
+        default) used to falsely penalise them, since per-feature bounds put ``d_min`` and
+        ``d_max`` on incomparable scales -- the reason ordering comparisons always happen in
+        raw scale now.
         """
         from dcba.dataset.scalers import ABCDConfigScaler, ABCDRelativeConfigScaler
 
@@ -551,14 +523,8 @@ class TestABCDConstraintPenaltyLossRawMode:
             loss = self._loss_with(scaler)(scaled, scaled)
             assert loss.item() == 0.0, scaler_cls.__name__
 
-        # sanity: the legacy scaled mode DOES falsely fire on the same configs
-        scaler = ABCDConfigScaler(n_max=10_000)
-        scaled = scaler.transform(raw)
-        legacy = ABCDConstraintPenaltyLoss(ordering_penalties="scaled")(scaled, scaled)
-        assert legacy.item() > 0.0
-
     def test_genuine_violation_is_penalised(self) -> None:
-        """A prediction that decodes to raw d_min > d_max must be penalised in raw mode."""
+        """A prediction that decodes to raw d_min > d_max must be penalised."""
         from dcba.dataset.scalers import ABCDConfigScaler
 
         scaler = ABCDConfigScaler(n_max=10_000)

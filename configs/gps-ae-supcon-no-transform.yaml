@@ -58,7 +58,6 @@ training:
       name: abcd_constraint
       args:
         lambda_penalty: 1.0
-        ordering_penalties: scaled
         # Same weights as gps-ae-supcon-output-weights.yaml, kept fixed so this run isolates the
         # scaler change. Re-derive with scripts/derive_output_weights.py once trained.
         weights: [1.028, 1.068, 1.959, 1.320, 1.034, 1.435, 1.473, 1.138, 1.029]
