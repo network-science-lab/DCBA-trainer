@@ -13,7 +13,7 @@ from lightning.pytorch.loggers import WandbLogger
 from torch import Tensor
 
 from dcba.dataset import ABCDConfigScaler
-from dcba.dataset.transforms import ABCD_CONFIG_KEYS
+from dcba.dataset.scalers import ABCD_CONFIG_KEYS
 from dcba.wrappers.base import DCBABaseWrapper
 
 

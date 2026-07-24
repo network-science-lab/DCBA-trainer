@@ -31,7 +31,7 @@ class ABCDDataModule(pl.LightningDataModule):
     :param scaler: Optional scaler applied after the transform to normalise config features.
         When ``None``, configs are kept in raw form.
     :param transform: Transform applied to each config record.  Defaults to
-        :class:`~dcba.dataset.transforms.ABCDConfigToTensor`.
+        :class:`~dcba.dataset.scalers.ABCDConfigToTensor`.
     :param node_transform: Transform applied to each graph to populate ``data["actor"].x``.
         Defaults to :class:`~dcba.dataset.transforms.CommunityToSize`.
     """

@@ -54,7 +54,7 @@ from tqdm import tqdm
 
 from dcba.datamodule import ABCDDataModule
 from dcba.dataset import ABCDConfigScaler
-from dcba.dataset.transforms import ABCD_CONFIG_KEYS
+from dcba.dataset.scalers import ABCD_CONFIG_KEYS
 from dcba.training.loss import config_pairwise_distance
 from dcba.training.trainer import (
     _build_node_transform,

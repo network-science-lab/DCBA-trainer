@@ -46,29 +46,29 @@ class ABCDConstraintPenaltyLoss(nn.Module):
       scaler.
     - ``"scaled"`` (legacy, default; also accepts ``True``): comparisons happen on the scaled
       values directly. Only meaningful when the compared features share one scaling map -- under
-      :class:`~dcba.dataset.transforms.ABCDConfigScaler`'s per-feature bounds it misfires on
+      :class:`~dcba.dataset.scalers.ABCDConfigScaler`'s per-feature bounds it misfires on
       valid configs. Kept as the default only for comparability with already-trained runs; prefer
       ``"raw"`` for new experiments.
     - ``"none"`` (also accepts ``False``): ordering penalties disabled; the ``[0, 1]`` range
       penalty stays. Sufficient on its own under
-      :class:`~dcba.dataset.transforms.ABCDRelativeConfigScaler`, where every ordering is
+      :class:`~dcba.dataset.scalers.ABCDRelativeConfigScaler`, where every ordering is
       equivalent to ``scaled <= 1`` by construction.
 
     .. note::
         ``c_min <= c_max`` is deliberately not enforced here: every scaler expresses ``c_min`` as
-        ``c_min / c_max`` (see :class:`~dcba.dataset.transforms.ABCDConfigScaler`), so the
+        ``c_min / c_max`` (see :class:`~dcba.dataset.scalers.ABCDConfigScaler`), so the
         ordering is guaranteed by construction together with the range penalty.
 
     .. note::
         ``n`` (index 0) is exempt from the above-range penalty (``> 1`` in normalised space)
         to accommodate edge cases where the model predicts graphs larger than ``n_max``.
 
-    Feature indices follow :data:`~dcba.dataset.transforms.ABCD_CONFIG_KEYS`:
+    Feature indices follow :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS`:
     ``[n, t1, t2, xi, c_min, c_max, d_min, d_max, nout]`` -> indices 0-8.
 
     :param lambda_penalty: Weight applied to the sum of constraint penalty terms.
     :param weights: Optional per-feature weight applied to the squared error before averaging,
-        length 9 in :data:`~dcba.dataset.transforms.ABCD_CONFIG_KEYS` order. Use this to give
+        length 9 in :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS` order. Use this to give
         harder-to-reconstruct parameters more gradient priority. ``None`` (default) weights every
         feature equally, identical to plain MSE.
     :param ordering_penalties: ``"raw"``, ``"scaled"`` or ``"none"`` -- see above. Booleans are

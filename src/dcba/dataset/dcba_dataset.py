@@ -13,7 +13,8 @@ from dcba_data_set.graph_io.data_models import (
 from torch.utils.data import Dataset
 from torch_geometric.transforms import BaseTransform
 
-from dcba.dataset.transforms import ABCDConfigScaler, ABCDConfigToTensor, CommunityToSize
+from dcba.dataset.scalers import ABCDConfigScaler, ABCDConfigToTensor
+from dcba.dataset.transforms import CommunityToSize
 
 
 class ABCDDataset(Dataset):
@@ -25,8 +26,8 @@ class ABCDDataset(Dataset):
     each ``__getitem__`` call.
 
     Config records are processed by ``transform`` (default:
-    :class:`~dcba.dataset.transforms.ABCDConfigToTensor`).  An optional
-    :class:`~dcba.dataset.transforms.ABCDConfigScaler` is applied afterwards when the transform
+    :class:`~dcba.dataset.scalers.ABCDConfigToTensor`).  An optional
+    :class:`~dcba.dataset.scalers.ABCDConfigScaler` is applied afterwards when the transform
     produces a tensor, normalising each feature to ``[0, 1]``.
 
     :param records: List of :class:`~dcba_data_set.graph_io.data_models.InstanceRecord` objects,
@@ -36,7 +37,7 @@ class ABCDDataset(Dataset):
     :param transform: Transform applied to each
         :class:`~dcba_data_set.graph_io.data_models.DCBAInstanceConfig` to produce the config
         representation stored in the dataset.  Defaults to
-        :class:`~dcba.dataset.transforms.ABCDConfigToTensor`.
+        :class:`~dcba.dataset.scalers.ABCDConfigToTensor`.
     :param node_transform: Transform applied to each graph to populate ``data["actor"].x``.
         Defaults to :class:`~dcba.dataset.transforms.CommunityToSize`; pass
         :class:`~dcba.dataset.transforms.ConstantNodeFeatures` for the no-community-features
@@ -83,7 +84,7 @@ class ABCDDataset(Dataset):
             :class:`~dcba_data_set.ds_generator.DatasetGenerator`.
         :param scaler: Optional scaler applied after the transform.
         :param transform: Transform applied to each config record.  Defaults to
-            :class:`~dcba.dataset.transforms.ABCDConfigToTensor`.
+            :class:`~dcba.dataset.scalers.ABCDConfigToTensor`.
         :param node_transform: Transform applied to each graph to populate
             ``data["actor"].x``.  Defaults to :class:`~dcba.dataset.transforms.CommunityToSize`.
 

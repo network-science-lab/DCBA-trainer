@@ -486,7 +486,7 @@ class TestABCDConstraintPenaltyLoss:
         The default (ordering_penalties=True) falsely penalises them instead, since that
         scaler's features live on incomparable scales -- the reason the flag exists.
         """
-        from dcba.dataset.transforms import ABCDRelativeConfigScaler
+        from dcba.dataset.scalers import ABCDRelativeConfigScaler
 
         raw = torch.tensor(
             [
@@ -542,7 +542,7 @@ class TestABCDConstraintPenaltyLossRawMode:
 
         This is the exact configuration that the legacy scaled mode falsely penalises.
         """
-        from dcba.dataset.transforms import ABCDConfigScaler, ABCDRelativeConfigScaler
+        from dcba.dataset.scalers import ABCDConfigScaler, ABCDRelativeConfigScaler
 
         raw = self._valid_raw()
         for scaler_cls in (ABCDConfigScaler, ABCDRelativeConfigScaler):
@@ -559,7 +559,7 @@ class TestABCDConstraintPenaltyLossRawMode:
 
     def test_genuine_violation_is_penalised(self) -> None:
         """A prediction that decodes to raw d_min > d_max must be penalised in raw mode."""
-        from dcba.dataset.transforms import ABCDConfigScaler
+        from dcba.dataset.scalers import ABCDConfigScaler
 
         scaler = ABCDConfigScaler(n_max=10_000)
         violating_raw = self._valid_raw()
@@ -570,7 +570,7 @@ class TestABCDConstraintPenaltyLossRawMode:
 
     def test_penalty_magnitude_is_order_one(self) -> None:
         """Violations are normalised by raw n, so the hinge cannot blow up with graph size."""
-        from dcba.dataset.transforms import ABCDConfigScaler
+        from dcba.dataset.scalers import ABCDConfigScaler
 
         scaler = ABCDConfigScaler(n_max=10_000)
         violating_raw = self._valid_raw()
@@ -581,7 +581,7 @@ class TestABCDConstraintPenaltyLossRawMode:
 
     def test_raw_mode_gradient_flows(self) -> None:
         """Gradients must flow through denormalise back to the prediction."""
-        from dcba.dataset.transforms import ABCDRelativeConfigScaler
+        from dcba.dataset.scalers import ABCDRelativeConfigScaler
 
         scaler = ABCDRelativeConfigScaler(n_max=10_000)
         scaled = scaler.transform(self._valid_raw())
@@ -598,7 +598,7 @@ class TestABCDConstraintPenaltyLossRawMode:
         denominator collapse to 1 under ABCDConfigScaler while c_max/d_max denormalised to
         thousands, producing train losses of ~1e4-1e5 at the start of real runs.
         """
-        from dcba.dataset.transforms import (
+        from dcba.dataset.scalers import (
             ABCDConfigScaler,
             ABCDLogConfigScaler,
             ABCDRelativeConfigScaler,
@@ -620,7 +620,7 @@ class TestABCDConstraintPenaltyLossRawMode:
         wrong way when the violator was its own denominator with a negative co-operand
         (predicted n < 0 at init under ABCDConfigScaler).
         """
-        from dcba.dataset.transforms import ABCDConfigScaler
+        from dcba.dataset.scalers import ABCDConfigScaler
 
         scaler = ABCDConfigScaler(n_max=10_000)
         target = scaler.transform(self._valid_raw())
