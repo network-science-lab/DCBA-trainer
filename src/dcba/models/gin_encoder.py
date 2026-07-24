@@ -16,8 +16,7 @@ class GINEncoder(nn.Module):
     No representation constraint is applied -- this is the regression baseline used in Stage 1
     as part of the joint ``L_reg + lambda * L_SupCon`` objective. Produces an embedding suitable
     for contrastive learning when paired with
-    :class:`~dcba.models.config_ae.ConfigAutoEncoder` or
-    :class:`~dcba.models.config_vae.ConfigVAE`.
+    :class:`~dcba.models.config_ae.ConfigAutoEncoder`.
 
     :param hidden_dims: Sizes of intermediate GIN layers.
     :param embedding_dim: Dimensionality of the graph embedding ``z_g``.

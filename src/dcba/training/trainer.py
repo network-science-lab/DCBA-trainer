@@ -18,14 +18,12 @@ from dcba.dataset import (
     ConstantNodeFeatures,
 )
 from dcba.models.config_ae import ConfigAutoEncoder
-from dcba.models.config_vae import ConfigVAE
 from dcba.models.gin_encoder import GINEncoder
 from dcba.models.gps_encoder import GPSEncoder
 from dcba.training.callbacks import get_callbacks
 from dcba.training.loggers import get_logger
 from dcba.training.loss import (
     ABCDConstraintPenaltyLoss,
-    KLDivergenceLoss,
     MultiPositiveSupConLoss,
 )
 from dcba.wrappers import DCBAAutoencoderWrapper, DCBASupConWrapper
@@ -37,7 +35,6 @@ _WRAPPERS = {
 
 _MODELS = {
     "ConfigAutoEncoder": ConfigAutoEncoder,
-    "ConfigVAE": ConfigVAE,
     "GINEncoder": GINEncoder,
     "GPSEncoder": GPSEncoder,
 }
@@ -45,7 +42,6 @@ _MODELS = {
 _LOSSES: dict[str, type[nn.Module]] = {
     "mse": nn.MSELoss,
     "abcd_constraint": ABCDConstraintPenaltyLoss,
-    "kl_divergence": KLDivergenceLoss,
     "supcon": MultiPositiveSupConLoss,
 }
 
