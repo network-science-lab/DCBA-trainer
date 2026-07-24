@@ -8,7 +8,7 @@ data:
   dataset_root: "abcd-big"
   transform: ABCDConfigToTensor
   # No community features (ablation): constant node features, pure graph structure.
-  node_transform: ConstantNodeFeatures
+  node_transform: CommunityToSize
   scaler:
     # Only intended difference from gps-ae-supcon-output-weights.yaml -- keep everything else in
     # sync so the comparison isolates the scaler change. See ABCDRelativeConfigScaler's docstring.
@@ -17,7 +17,7 @@ data:
       n_max: 10000
   val_ratio: 0.10
   test_ratio: 0.10
-  batch_size: 64
+  batch_size: 32
   num_workers: 0
 
 models:
@@ -88,7 +88,6 @@ training:
         no-community-features,
         abcd-constraint,
         bidirectional,
-        batch64,
         cluster-pool,
         reweighted,
         relative-scaler,
@@ -103,6 +102,6 @@ training:
     - name: early_stopping
       monitor: val_loss
       mode: min
-      patience: 5
+      patience: 3
     - name: model_summary
       max_depth: -1

@@ -8,6 +8,7 @@ from dcba.dataset.transforms import (
     ABCD_CONFIG_KEYS,
     ABCDConfigScaler,
     ABCDLogConfigScaler,
+    ABCDNMaxConfigScaler,
     ABCDRelativeConfigScaler,
 )
 
@@ -27,6 +28,59 @@ def _raw_batch() -> torch.Tensor:
             [50.0, 3.0, 2.0, 0.5, 2.0, 10.0, 1.0, 5.0, 1.0],
         ]
     )
+
+
+class TestABCDNMaxConfigScaler:
+    """Legacy shared-n_max scaler: linear map dividing every size feature by n_max."""
+
+    def test_round_trip_recovers_raw_values(self) -> None:
+        """Transform then inverse_transform returns the original batch (up to int rounding)."""
+        raw = _raw_batch()
+        scaler = ABCDNMaxConfigScaler(n_max=_N_MAX)
+        recovered = scaler.inverse_transform(scaler.transform(raw))
+        assert torch.allclose(recovered, raw, atol=1e-3)
+
+    def test_round_trip_single_row(self) -> None:
+        """Round-trip also holds for a single (non-batched) config row."""
+        raw = _raw_batch()[0]
+        scaler = ABCDNMaxConfigScaler(n_max=_N_MAX)
+        recovered = scaler.inverse_transform(scaler.transform(raw))
+        assert torch.allclose(recovered, raw, atol=1e-3)
+
+    def test_scaled_values_in_unit_range(self) -> None:
+        """Every scaled feature lies in [0, 1] for constraint-respecting raw inputs."""
+        scaler = ABCDNMaxConfigScaler(n_max=_N_MAX)
+        scaled = scaler.transform(_raw_batch())
+        assert scaled.min() >= 0.0
+        assert scaled.max() <= 1.0 + 1e-6
+
+    def test_size_features_divide_by_n_max(self) -> None:
+        """c_max, d_min, d_max, nout map linearly against the shared (1, n_max) / (0, n_max) bound."""
+        scaler = ABCDNMaxConfigScaler(n_max=_N_MAX)
+        raw = _raw_batch()
+        scaled = scaler.transform(raw)
+        for key in ("c_max", "d_min", "d_max"):
+            i = ABCD_CONFIG_KEYS.index(key)
+            expected = (raw[:, i] - 1.0) / (_N_MAX - 1.0)
+            assert torch.allclose(scaled[:, i], expected, atol=1e-6)
+        nout_idx = ABCD_CONFIG_KEYS.index("nout")
+        assert torch.allclose(scaled[:, nout_idx], raw[:, nout_idx] / _N_MAX, atol=1e-6)
+
+    def test_c_min_is_linear_not_ratio(self) -> None:
+        """Unlike ABCDConfigScaler, c_min uses the plain linear map, not c_min / c_max."""
+        scaler = ABCDNMaxConfigScaler(n_max=_N_MAX)
+        raw = _raw_batch()
+        scaled = scaler.transform(raw)
+        c_min_idx = ABCD_CONFIG_KEYS.index("c_min")
+        expected = (raw[:, c_min_idx] - 1.0) / (_N_MAX - 1.0)
+        assert torch.allclose(scaled[:, c_min_idx], expected, atol=1e-6)
+
+    def test_denormalise_is_differentiable(self) -> None:
+        """Denormalise supports gradient flow, as the constraint loss's 'raw' mode requires."""
+        scaler = ABCDNMaxConfigScaler(n_max=_N_MAX)
+        scaled = scaler.transform(_raw_batch()).requires_grad_(True)
+        scaler.denormalise(scaled).sum().backward()
+        assert scaled.grad is not None
 
 
 class TestABCDLogConfigScalerRoundTrip:

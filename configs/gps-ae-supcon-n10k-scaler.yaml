@@ -10,9 +10,10 @@ data:
   # No community features (ablation): constant node features, pure graph structure.
   node_transform: CommunityToSize
   scaler:
-    # Only intended difference from gps-ae-supcon-output-weights.yaml -- keep everything else in
-    # sync so the comparison isolates the scaler change. See ABCDLogConfigScaler's docstring.
-    name: ABCDLogConfigScaler
+    # Legacy shared-n_max baseline: every size feature divided by n_max (see
+    # ABCDNMaxConfigScaler's docstring). Only intended difference from the base-scaler run -- keep
+    # everything else in sync so the comparison isolates the scaler change.
+    name: ABCDNMaxConfigScaler
     args:
       n_max: 10000
   val_ratio: 0.10
@@ -60,9 +61,9 @@ training:
       name: abcd_constraint
       args:
         lambda_penalty: 1.0
-        # 'raw' compares the ABCD generator's validity conditions in raw scale, denormalising
-        # predictions through this config's scaler; the legacy 'scaled' mode is wrong under
-        # ABCDLogConfigScaler (see the loss docstring).
+        # 'raw' compares the ABCD generator's validity conditions (d_min <= d_max, c_max <= n,
+        # d_max <= n, nout <= n) in raw scale, denormalising predictions through this config's
+        # scaler; the legacy 'scaled' mode is wrong under this scaler (see the loss docstring).
         ordering_penalties: raw
         # Same weights as gps-ae-supcon-output-weights.yaml, kept fixed so this run isolates the
         # scaler change. Re-derive with scripts/derive_output_weights.py once trained.
@@ -81,7 +82,7 @@ training:
       weight_decay: 0.00001
   logger:
     project: dcba
-    name: gps-ae-supcon-log-scaler
+    name: gps-ae-supcon-relative-scaler
     tags:
       [
         gps,
@@ -90,7 +91,7 @@ training:
         bidirectional,
         cluster-pool,
         reweighted,
-        log-scaler,
+        relative-scaler,
       ]
   callbacks:
     - name: model_checkpoint

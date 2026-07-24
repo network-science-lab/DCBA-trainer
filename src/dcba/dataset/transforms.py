@@ -140,6 +140,110 @@ class ABCDConfigScaler:
         return self.transform(x)
 
 
+def abcd_nmax_bounds(n_max: int = 10_000) -> dict[str, tuple[float, float]]:
+    """
+    Return per-feature ``(lo, hi)`` bounds with a single shared ``n_max`` cap on size features.
+
+    Legacy bounds used by :class:`ABCDNMaxConfigScaler`: every feature analytically bounded by
+    ``n`` in ABCDGraphGenerator.jl (``n``, ``c_min``, ``c_max``, ``d_min``, ``d_max``, ``nout``)
+    shares the same ``n_max``-sized upper bound, so each is normalised by dividing by ``n_max``.
+    ``t1``, ``t2`` (``@assert alpha >= 1``, upper ~5 in practice) and ``xi`` (``0 <= xi <= 1``)
+    keep their own hard-constraint bounds.
+
+    Kept separate from :func:`abcd_param_bounds` -- whose size features now use per-feature maxima
+    observed on ``abcd-big`` -- so the naive shared-``n_max`` baseline remains available for
+    scaler-comparison experiments.
+
+    :param n_max: Maximum graph size in the dataset; upper bound for all size-like features.
+
+    :returns: Dict mapping each key in :data:`ABCD_CONFIG_KEYS` to ``(lo, hi)``.
+    """
+    n = float(n_max)
+    return {
+        "n": (1.0, n),  # @assert n > 0
+        "t1": (1.0, 5.0),  # @assert alpha >= 1
+        "t2": (1.0, 5.0),  # @assert alpha >= 1
+        "xi": (0.0, 1.0),  # 0 <= xi <= 1 (hard constraint)
+        "c_min": (1.0, n),  # >= 1; c_min <= c_max <= n
+        "c_max": (1.0, n),  # c_max <= n (ABCDConfig validator)
+        "d_min": (1.0, n),  # @assert 1 <= d_min
+        "d_max": (1.0, n),  # @assert d_max >= d_min
+        "nout": (0.0, n),  # 0 <= nout <= n (ABCDConfig validator)
+    }
+
+
+class ABCDNMaxConfigScaler:
+    """
+    Normalise and denormalise ABCD config tensors feature-wise to ``[0, 1]``, dividing every
+    size-like feature by a single shared ``n_max``.
+
+    Legacy linear (min-max) scaler: the pre-per-feature-bounds :class:`ABCDConfigScaler`, preserved
+    as a baseline. Every feature -- including ``c_min`` -- uses the linear map from
+    :func:`abcd_nmax_bounds`, so ``c_min``, ``c_max``, ``d_min``, ``d_max`` and ``nout`` all divide
+    by ``n_max`` rather than by per-feature maxima or a per-graph anchor. Unlike the current
+    :class:`ABCDConfigScaler`, ``c_min`` is *not* rescaled as ``c_min / c_max``.
+
+    The inverse is exact (linear map), making this usable at inference time to recover
+    human-readable configs from model output. :meth:`denormalise` provides the differentiable
+    inverse required by :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss` in ``"raw"`` mode.
+
+    :param n_max: Maximum graph size in the dataset.  Passed directly to :func:`abcd_nmax_bounds`.
+        Defaults to 10 000, matching the canonical ABCDGraphGenerator.jl example configuration.
+    """
+
+    def __init__(self, n_max: int = 10_000) -> None:
+        """Initialise the scaler, building lo/hi tensors from :func:`abcd_nmax_bounds`."""
+        bounds = abcd_nmax_bounds(n_max)
+        self._lo = torch.tensor([bounds[k][0] for k in ABCD_CONFIG_KEYS], dtype=torch.float32)
+        self._hi = torch.tensor([bounds[k][1] for k in ABCD_CONFIG_KEYS], dtype=torch.float32)
+
+    def transform(self, x: Tensor) -> Tensor:
+        """
+        Normalise ``x`` to ``[0, 1]`` per feature.
+
+        :param x: Float tensor of shape ``(..., 9)``, raw (unscaled) feature values.
+
+        :returns: Normalised tensor of the same shape.
+        """
+        return (x - self._lo) / (self._hi - self._lo)
+
+    def denormalise(self, x: Tensor) -> Tensor:
+        """
+        Recover the original scale from a normalised tensor, without integer rounding.
+
+        Fully differentiable -- a plain linear inverse map, so gradients flow through it (e.g.
+        raw-space constraint penalties in
+        :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`). Use :meth:`inverse_transform`
+        instead when integer-rounded configs are wanted.
+
+        :param x: Normalised float tensor of shape ``(..., 9)``.
+
+        :returns: Tensor in the original feature scale, integer features left unrounded.
+        """
+        lo = self._lo.to(x.device)
+        hi = self._hi.to(x.device)
+        return x * (hi - lo) + lo
+
+    def inverse_transform(self, x: Tensor) -> Tensor:
+        """
+        Recover the original scale from a normalised tensor.
+
+        Integer-valued features (indices :data:`ABCD_INT_FEATURE_INDICES`) are rounded to the
+        nearest whole number after the linear inverse map.  The tensor dtype remains ``float32``.
+
+        :param x: Normalised float tensor of shape ``(..., 9)``.
+
+        :returns: Tensor in the original feature scale.
+        """
+        out = self.denormalise(x)
+        out[..., ABCD_INT_FEATURE_INDICES] = out[..., ABCD_INT_FEATURE_INDICES].round()
+        return out
+
+    def __call__(self, x: Tensor) -> Tensor:
+        """Apply :meth:`transform`."""
+        return self.transform(x)
+
+
 #: Size-like features scaled as ``log1p(x) / log1p(n)`` by :class:`ABCDLogConfigScaler`.
 _LOG_N_RELATIVE_KEYS: tuple[str, ...] = ("c_max", "d_min", "d_max", "nout")
 
