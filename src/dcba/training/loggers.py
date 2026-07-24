@@ -26,12 +26,18 @@ def get_logger(config: dict) -> loggers.WandbLogger | DummyLogger:
     :returns: A :class:`~lightning.pytorch.loggers.WandbLogger` if wandb is reachable,
         otherwise a :class:`DummyLogger` that silently absorbs all calls.
     """
+    logger_cfg = config["training"]["logger"]
     try:
         run = (
             wandb.init(
-                project=config["training"]["logger"]["project"],
-                name=config["training"]["logger"].get("name"),
-                tags=config["training"]["logger"].get("tags", []),
+                project=logger_cfg["project"],
+                name=logger_cfg.get("name"),
+                tags=logger_cfg.get("tags", []),
+                # Resume an existing run when its id is supplied (e.g. after a crash); otherwise
+                # wandb mints a fresh run. ``resume="allow"`` continues that id if it exists and
+                # starts it if it does not.
+                id=logger_cfg.get("id"),
+                resume=logger_cfg.get("resume", "allow" if logger_cfg.get("id") else None),
             )
             if wandb.run is None
             else wandb.run

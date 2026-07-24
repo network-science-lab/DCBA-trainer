@@ -73,6 +73,30 @@ Training:
 uv run dcba-train --config-name base
 ```
 
+Resume training (e.g. after a crash or a full disk): point `training.ckpt_path` at a Lightning
+checkpoint. Prefer `checkpoints/last.ckpt`, which restores the full training state — model weights,
+optimiser, epoch, global step, and callback state (early-stopping counter, best score). By default
+Hydra stamps a fresh `.trainings/<date>/<time>/` directory per launch, so also override
+`hydra.run.dir` to the original run directory if you want the resumed run to keep writing its
+checkpoints and logs into the same place:
+
+```bash
+uv run dcba-train --config-name gps-ae-supcon-relative-scaler \
+  hydra.run.dir=.trainings/2026-07-17/11-51-46 \
+  +training.ckpt_path=.trainings/2026-07-17/11-51-46/checkpoints/last.ckpt \
+  +training.logger.id=ss4h8yng
+```
+
+To continue logging into the **same W&B run** instead of creating a new one, pass its run id via
+`training.logger.id` (the `ss4h8yng` above — it is the last path segment of the run URL). When an id
+is given, `resume` defaults to `allow`, so metrics and steps continue on the original run; override
+`training.logger.resume` (`allow` / `must` / `never`) if you need different behaviour.
+
+Drop the `hydra.run.dir` override to resume the training state but write the continuation into a new
+timestamped directory instead. `ckpt_path`, `logger.id`, and `logger.resume` are not set in the
+shipped configs, so they are passed with Hydra's `+` (append) syntax; omitting them entirely trains
+from scratch as before.
+
 Sweep (hyperparameter tuning):
 
 ```bash
@@ -94,16 +118,16 @@ interactive filtering in the UI:
 uv run python scripts/analyse_predictions.py <entity>/dcba/<run_id> --within-k 1
 ```
 
-Embedding stability analysis (checks whether distance in raw `θ` space is preserved by the
-trained `h_G` / `h_θ` embeddings, for the gps-ae/vae-supcon runs logged to W&B):
+Embedding stability analysis (checks whether distance in raw `θ` space is preserved by the trained
+`h_G` / `h_θ` embeddings, for the gps-ae/vae-supcon runs logged to W&B):
 
 ```bash
 uv run scripts/embedding_stability.py
 ```
 
-Requires `wandb login` (or an existing `.netrc` entry) and the dataset directory referenced by
-each run's config (`data.dataset_root`) to already be pulled via `dvc pull` on this machine. Runs,
-W&B project, output directory, and sample size are set as constants at the top of the script.
+Requires `wandb login` (or an existing `.netrc` entry) and the dataset directory referenced by each
+run's config (`data.dataset_root`) to already be pulled via `dvc pull` on this machine. Runs, W&B
+project, output directory, and sample size are set as constants at the top of the script.
 
 ## Model architecture
 

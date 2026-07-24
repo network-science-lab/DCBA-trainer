@@ -286,7 +286,10 @@ def train(config: dict) -> None:
         gradient_clip_val=clip_val,
         gradient_clip_algorithm="norm" if clip_val is not None else None,
     )
-    trainer.fit(wrapper, datamodule=datamodule)
+    # Optional resume: point at a Lightning checkpoint (e.g. checkpoints/last.ckpt) to restore the
+    # full training state -- model weights, optimizer, epoch, global step, and callback state.
+    ckpt_path = training_cfg.get("ckpt_path")
+    trainer.fit(wrapper, datamodule=datamodule, ckpt_path=ckpt_path)
     wrapper.set_scaler(datamodule.scaler)
     metrics = trainer.test(wrapper, datamodule=datamodule)
     for i in Path(f"{config['hydra']['runtime']['output_dir']}/checkpoints").iterdir():
