@@ -11,6 +11,7 @@ from dcba.dataset import (
     ABCDConfigScaler,
     ABCDConfigSchema,
     ABCDConfigToTensor,
+    ABCDIdentityConfigScaler,
     ABCDLogConfigScaler,
     ABCDNMaxConfigScaler,
     ABCDRelativeConfigScaler,
@@ -47,6 +48,7 @@ _LOSSES: dict[str, type[nn.Module]] = {
 
 _SCALERS: dict[str, type] = {
     "ABCDConfigScaler": ABCDConfigScaler,
+    "ABCDIdentityConfigScaler": ABCDIdentityConfigScaler,
     "ABCDLogConfigScaler": ABCDLogConfigScaler,
     "ABCDNMaxConfigScaler": ABCDNMaxConfigScaler,
     "ABCDRelativeConfigScaler": ABCDRelativeConfigScaler,

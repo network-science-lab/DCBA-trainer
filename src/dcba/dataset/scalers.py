@@ -456,6 +456,40 @@ class ABCDRelativeConfigScaler(ABCDBaseConfigScaler):
         return torch.stack(cols, dim=-1)
 
 
+class ABCDIdentityConfigScaler(ABCDBaseConfigScaler):
+    """
+    No-op scaler: leaves every ABCD config feature in its raw scale.
+
+    Gives the "no scaling" comparison arm a real scaler object rather than ``None``, so it can be
+    attached to :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss` like any other scaler --
+    that loss requires a scaler with a differentiable :meth:`denormalise` to compare orderings in
+    raw scale, regardless of which (if any) scaling the data pipeline itself applies.
+
+    :meth:`inverse_transform` (inherited) still rounds integer-valued features, since that step is
+    about output presentation, not about undoing a scaling map.
+    """
+
+    def transform(self, x: Tensor) -> Tensor:
+        """
+        Return ``x`` unchanged.
+
+        :param x: Float tensor of shape ``(..., 9)``, raw (unscaled) feature values.
+
+        :returns: ``x``, unmodified.
+        """
+        return x
+
+    def denormalise(self, x: Tensor) -> Tensor:
+        """
+        Return ``x`` unchanged.
+
+        :param x: Float tensor of shape ``(..., 9)``.
+
+        :returns: ``x``, unmodified.
+        """
+        return x
+
+
 class ABCDConfigToTensor(BaseTransform):
     """
     Transform a :class:`~dcba_data_set.graph_io.data_models.DCBAInstanceConfig` to a float tensor.
