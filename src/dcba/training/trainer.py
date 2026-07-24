@@ -200,12 +200,6 @@ def build_supcon_wrapper(config: dict) -> DCBASupConWrapper:
     supcon_loss = _build_loss(losses_cfg["repr"])
     graph_encoder = _build_model(config["models"]["graph"])
     config_encoder = _build_model(config["models"]["theta"])
-    kl_cfg = losses_cfg.get("kl")
-    kl_loss = _build_loss(kl_cfg) if kl_cfg is not None else None
-    if kl_loss is not None and not isinstance(config_encoder, ConfigVAE):
-        raise TypeError(
-            f"kl_loss requires a ConfigVAE config encoder, got {type(config_encoder).__name__}."
-        )
     return DCBASupConWrapper(
         graph_encoder=graph_encoder,
         config_encoder=config_encoder,
@@ -213,9 +207,6 @@ def build_supcon_wrapper(config: dict) -> DCBASupConWrapper:
         reg_loss=reg_loss,
         supcon_loss=supcon_loss,
         lambda_supcon=losses_cfg["repr"].get("weight", 1.0),
-        kl_loss=kl_loss,
-        beta_kl=kl_cfg.get("beta", 1.0) if kl_cfg is not None else 1.0,
-        kl_warmup_epochs=kl_cfg.get("warmup_epochs", 0) if kl_cfg is not None else 0,
         aux_weight=training_cfg.get("aux_weight", 0.1),
     )
 
@@ -258,17 +249,10 @@ def train(config: dict) -> None:
         encoder = _build_model(next(iter(config["models"].values())))
         loss_fn = _build_loss(losses_cfg["reg"])
         _attach_ordering_scaler(loss_fn, config)
-        kl_cfg = losses_cfg.get("kl")
-        kl_loss = _build_loss(kl_cfg) if kl_cfg is not None else None
-        if kl_loss is not None and not isinstance(encoder, ConfigVAE):
-            raise TypeError(f"kl_loss requires a ConfigVAE encoder, got {type(encoder).__name__}.")
         wrapper: pl.LightningModule = DCBAAutoencoderWrapper(
             encoder,
             training_cfg["optimizer"]["args"],
             loss_fn=loss_fn,
-            kl_loss=kl_loss,
-            beta_kl=kl_cfg.get("beta", 1.0) if kl_cfg is not None else 1.0,
-            kl_warmup_epochs=kl_cfg.get("warmup_epochs", 0) if kl_cfg is not None else 0,
         )
     elif wrapper_name == "supcon":
         wrapper = build_supcon_wrapper(config)
