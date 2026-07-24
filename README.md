@@ -119,7 +119,7 @@ uv run python scripts/analyse_predictions.py <entity>/dcba/<run_id> --within-k 1
 ```
 
 Embedding stability analysis (checks whether distance in raw `θ` space is preserved by the trained
-`h_G` / `h_θ` embeddings, for the gps-ae/vae-supcon runs logged to W&B):
+`h_G` / `h_θ` embeddings, for the gps-ae-supcon runs logged to W&B):
 
 ```bash
 uv run scripts/embedding_stability.py
