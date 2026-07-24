@@ -18,16 +18,13 @@ class ABCDConstraintPenaltyLoss(nn.Module):
     enforce, in raw scale via the attached scaler's :meth:`denormalise` (attach with
     :meth:`set_scaler`):
 
+    - ``c_min <= c_max``
     - ``d_min <= d_max``
     - ``c_max <= n``
     - ``d_max <= n``
     - ``nout <= n``
 
     Violations are divided by the target's raw ``n`` to keep the hinge dimensionless.
-
-    .. note::
-        ``c_min <= c_max`` is not enforced here -- guaranteed by the scaler's ``c_min/c_max``
-        ratio together with the range penalty.
 
     .. note::
         ``n`` is exempt from the above-range penalty, to allow predictions above ``n_max``.
@@ -82,6 +79,8 @@ class ABCDConstraintPenaltyLoss(nn.Module):
         # or the other).
         scale = self._scaler.denormalise(target.detach())[:, 0].clamp(min=1.0)
 
+        # c_min (idx 4) <= c_max (idx 5)
+        c_order = F.relu((values[:, 4] - values[:, 5]) / scale) ** 2
         # d_min (idx 6) <= d_max (idx 7)
         d_order = F.relu((values[:, 6] - values[:, 7]) / scale) ** 2
         # c_max (idx 5) <= n (idx 0)
@@ -90,7 +89,7 @@ class ABCDConstraintPenaltyLoss(nn.Module):
         d_max_n = F.relu((values[:, 7] - values[:, 0]) / scale) ** 2
         # nout (idx 8) <= n (idx 0)
         nout_n = F.relu((values[:, 8] - values[:, 0]) / scale) ** 2
-        return (d_order + c_max_n + d_max_n + nout_n).mean()
+        return (c_order + d_order + c_max_n + d_max_n + nout_n).mean()
 
     def forward(self, x_hat: Tensor, target: Tensor) -> Tensor:
         """

@@ -436,18 +436,6 @@ class TestABCDConstraintPenaltyLoss:
         loss_invalid = loss_fn(invalid, target)
         assert loss_invalid.item() > loss_valid.item()
 
-    def test_c_min_c_max_ordering_not_penalised(self) -> None:
-        """c_min > c_max in raw feature values must not be penalised (c_min is now a ratio)."""
-        loss_fn = self._loss_with_scaler(lambda_penalty=1.0)
-        valid = self._make_valid()
-        same_mse = valid.clone()
-        same_mse[:, 4] = 0.9  # would have violated the old absolute c_min <= c_max constraint
-        target = valid.clone()
-        target[:, 4] = 0.9  # match target so this differs from `valid` only in feature 4
-
-        loss = loss_fn(same_mse, target)
-        assert abs(loss.item()) < 1e-6
-
     def test_per_feature_weights_scale_that_features_error(self) -> None:
         """Upweighting a single feature must scale exactly that feature's contribution to MSE."""
         weights = [1.0] * 9
@@ -522,6 +510,28 @@ class TestABCDConstraintPenaltyLossOrdering:
             scaled = scaler.transform(raw)
             loss = self._loss_with(scaler)(scaled, scaled)
             assert loss.item() == 0.0, scaler_cls.__name__
+
+    def test_c_min_c_max_guaranteed_by_ratio_scaler(self) -> None:
+        """Under a ratio-based scaler, any in-range c_min column satisfies c_min <= c_max."""
+        from dcba.dataset.scalers import ABCDConfigScaler
+
+        scaler = ABCDConfigScaler()
+        scaled = scaler.transform(self._valid_raw())
+        x_hat = scaled.clone()
+        x_hat[:, 4] = 0.999  # near-maximal c_min/c_max ratio, still within [0, 1]
+        loss = self._loss_with(scaler)(x_hat, x_hat)
+        assert loss.item() == 0.0
+
+    def test_c_min_c_max_violation_penalised_under_nmax_scaler(self) -> None:
+        """ABCDNMaxConfigScaler doesn't ratio c_min, so a genuine violation must be caught."""
+        from dcba.dataset.scalers import ABCDNMaxConfigScaler
+
+        scaler = ABCDNMaxConfigScaler()
+        violating_raw = self._valid_raw()
+        violating_raw[:, 4] = violating_raw[:, 5] + 50.0  # c_min > c_max: genuine violation
+        scaled = scaler.transform(violating_raw)
+        loss = self._loss_with(scaler)(scaled, scaled)
+        assert loss.item() > 0.0
 
     def test_genuine_violation_is_penalised(self) -> None:
         """A prediction that decodes to raw d_min > d_max must be penalised."""
