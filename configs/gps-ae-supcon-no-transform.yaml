@@ -9,6 +9,10 @@ data:
   transform: ABCDConfigToTensor
   # No community features (ablation): constant node features, pure graph structure.
   node_transform: CommunityToSize
+  scaler:
+    # "No transform" ablation: leaves theta features in raw scale, but still a real scaler object
+    # (rather than omitting this block) so ABCDConstraintPenaltyLoss always has one to attach to.
+    name: ABCDIdentityConfigScaler
   val_ratio: 0.10
   test_ratio: 0.10
   batch_size: 32
@@ -54,7 +58,6 @@ training:
       name: abcd_constraint
       args:
         lambda_penalty: 1.0
-        ordering_penalties: scaled
         # Same weights as gps-ae-supcon-output-weights.yaml, kept fixed so this run isolates the
         # scaler change. Re-derive with scripts/derive_output_weights.py once trained.
         weights: [1.028, 1.068, 1.959, 1.320, 1.034, 1.435, 1.473, 1.138, 1.029]

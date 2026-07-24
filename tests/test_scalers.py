@@ -4,9 +4,10 @@ import math
 
 import torch
 
-from dcba.dataset.transforms import (
+from dcba.dataset.scalers import (
     ABCD_CONFIG_KEYS,
     ABCDConfigScaler,
+    ABCDIdentityConfigScaler,
     ABCDLogConfigScaler,
     ABCDNMaxConfigScaler,
     ABCDRelativeConfigScaler,
@@ -16,7 +17,7 @@ _N_MAX = 10_000
 
 
 def _raw_batch() -> torch.Tensor:
-    """A small, constraint-respecting batch of raw ABCD configs, varied in scale.
+    """Build a small, constraint-respecting batch of raw ABCD configs, varied in scale.
 
     Columns follow :data:`ABCD_CONFIG_KEYS`: ``[n, t1, t2, xi, c_min, c_max, d_min, d_max, nout]``.
     Each row keeps ``c_min <= c_max <= n``, ``d_min <= d_max <= n`` and ``nout <= n``.
@@ -55,7 +56,7 @@ class TestABCDNMaxConfigScaler:
         assert scaled.max() <= 1.0 + 1e-6
 
     def test_size_features_divide_by_n_max(self) -> None:
-        """c_max, d_min, d_max, nout map linearly against the shared (1, n_max) / (0, n_max) bound."""
+        """c_max, d_min, d_max, nout map linearly against the shared (1, n_max)/(0, n_max) bound."""
         scaler = ABCDNMaxConfigScaler(n_max=_N_MAX)
         raw = _raw_batch()
         scaled = scaler.transform(raw)
@@ -121,7 +122,7 @@ class TestABCDLogConfigScalerRange:
         assert torch.allclose(scaled[:, n_idx], expected, atol=1e-6)
 
     def test_c_min_still_scaled_as_ratio_to_c_max(self) -> None:
-        """c_min keeps ABCDConfigScaler's `c_min / c_max` treatment, unaffected by the log change."""
+        """c_min keeps the `c_min / c_max` treatment, unaffected by the log change."""
         scaler = ABCDLogConfigScaler(n_max=_N_MAX)
         raw = _raw_batch()
         scaled = scaler.transform(raw)
@@ -262,3 +263,32 @@ class TestABCDRelativeConfigScalerNInvariance:
         for key in ("c_max", "d_max"):
             i = ABCD_CONFIG_KEYS.index(key)
             assert torch.isclose(s_small[i], s_large[i], atol=1e-6)
+
+
+class TestABCDIdentityConfigScaler:
+    """No-op scaler: every method is the identity, modulo inverse_transform's int rounding."""
+
+    def test_transform_is_identity(self) -> None:
+        """transform() must return the input unchanged."""
+        raw = _raw_batch()
+        scaler = ABCDIdentityConfigScaler()
+        assert torch.equal(scaler.transform(raw), raw)
+
+    def test_denormalise_is_identity(self) -> None:
+        """denormalise() must return the input unchanged."""
+        raw = _raw_batch()
+        scaler = ABCDIdentityConfigScaler()
+        assert torch.equal(scaler.denormalise(raw), raw)
+
+    def test_round_trip_recovers_raw_values(self) -> None:
+        """Transform then inverse_transform returns the original batch (up to int rounding)."""
+        raw = _raw_batch()
+        scaler = ABCDIdentityConfigScaler()
+        recovered = scaler.inverse_transform(scaler.transform(raw))
+        assert torch.allclose(recovered, raw, atol=1e-3)
+
+    def test_call_matches_transform(self) -> None:
+        """__call__ must delegate to transform()."""
+        raw = _raw_batch()
+        scaler = ABCDIdentityConfigScaler()
+        assert torch.equal(scaler(raw), scaler.transform(raw))

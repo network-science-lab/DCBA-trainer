@@ -1,8 +1,8 @@
 # ruff: noqa
 """Check whether ABCDConfigScaler's bounds match each parameter's real dynamic range.
 
-:class:`~dcba.dataset.transforms.ABCDConfigScaler` maps every ABCD parameter to ``[0, 1]`` using
-:func:`~dcba.dataset.transforms.abcd_param_bounds`. Six of the nine parameters
+:class:`~dcba.dataset.scalers.ABCDConfigScaler` maps every ABCD parameter to ``[0, 1]`` using
+:func:`~dcba.dataset.scalers.abcd_param_bounds`. Six of the nine parameters
 (``n, c_min, c_max, d_min, d_max, nout``) share the same analytical upper bound (``n_max``), even
 though their realised values in an actual dataset can occupy wildly different fractions of that
 shared bound. A parameter that ends up compressed into a tiny sliver of ``[0, 1]`` gets almost no
@@ -32,7 +32,7 @@ from dcba_data_set.graph_io import load_dataset
 from dcba_data_set.graph_io.data_models import DCBAInstanceConfig
 from torch import Tensor
 
-from dcba.dataset.transforms import ABCD_CONFIG_KEYS, ABCDConfigToTensor, abcd_param_bounds
+from dcba.dataset.scalers import ABCD_CONFIG_KEYS, ABCDConfigToTensor, abcd_param_bounds
 from dcba.utils.paths import DATA_ROOT
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -80,7 +80,7 @@ def _load_raw_configs(dataset_root: Path) -> Tensor:
         :func:`~dcba_data_set.graph_io.load_dataset`.
 
     :returns: ``(N, 9)`` float tensor, one row per instance, columns ordered by
-        :data:`~dcba.dataset.transforms.ABCD_CONFIG_KEYS`.
+        :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS`.
     """
     records = load_dataset(dataset_root)
     to_tensor = ABCDConfigToTensor()
@@ -98,7 +98,7 @@ def _occupied_range_pct(raw_configs: Tensor) -> dict[str, float]:
 
     :param raw_configs: ``(N, 9)`` raw config tensor, as returned by :func:`_load_raw_configs`.
 
-    :returns: Dict mapping each key in :data:`~dcba.dataset.transforms.ABCD_CONFIG_KEYS` to the
+    :returns: Dict mapping each key in :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS` to the
         percentage of its scaler bound width covered by one standard deviation of real data.
     """
     bounds = abcd_param_bounds()

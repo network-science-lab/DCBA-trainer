@@ -1,14 +1,12 @@
 """Neural network modules for DCBA."""
 
 from dcba.models.config_ae import ConfigAutoEncoder
-from dcba.models.config_vae import ConfigVAE
 from dcba.models.gin_encoder import GINEncoder
 from dcba.models.gps_encoder import GPSEncoder
 from dcba.models.types import ForwardOutput
 
 __all__ = [
     "ConfigAutoEncoder",
-    "ConfigVAE",
     "ForwardOutput",
     "GINEncoder",
     "GPSEncoder",

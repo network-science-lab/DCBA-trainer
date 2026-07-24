@@ -61,10 +61,6 @@ training:
       name: abcd_constraint
       args:
         lambda_penalty: 1.0
-        # 'raw' compares the ABCD generator's validity conditions (d_min <= d_max, c_max <= n,
-        # d_max <= n, nout <= n) in raw scale, denormalising predictions through this config's
-        # scaler; the legacy 'scaled' mode is wrong under this scaler (see the loss docstring).
-        ordering_penalties: raw
         # Same weights as gps-ae-supcon-output-weights.yaml, kept fixed so this run isolates the
         # scaler change. Re-derive with scripts/derive_output_weights.py once trained.
         weights: [1.028, 1.068, 1.959, 1.320, 1.034, 1.435, 1.473, 1.138, 1.029]

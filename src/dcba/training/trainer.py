@@ -11,6 +11,7 @@ from dcba.dataset import (
     ABCDConfigScaler,
     ABCDConfigSchema,
     ABCDConfigToTensor,
+    ABCDIdentityConfigScaler,
     ABCDLogConfigScaler,
     ABCDNMaxConfigScaler,
     ABCDRelativeConfigScaler,
@@ -18,14 +19,12 @@ from dcba.dataset import (
     ConstantNodeFeatures,
 )
 from dcba.models.config_ae import ConfigAutoEncoder
-from dcba.models.config_vae import ConfigVAE
 from dcba.models.gin_encoder import GINEncoder
 from dcba.models.gps_encoder import GPSEncoder
 from dcba.training.callbacks import get_callbacks
 from dcba.training.loggers import get_logger
 from dcba.training.loss import (
     ABCDConstraintPenaltyLoss,
-    KLDivergenceLoss,
     MultiPositiveSupConLoss,
 )
 from dcba.wrappers import DCBAAutoencoderWrapper, DCBASupConWrapper
@@ -37,7 +36,6 @@ _WRAPPERS = {
 
 _MODELS = {
     "ConfigAutoEncoder": ConfigAutoEncoder,
-    "ConfigVAE": ConfigVAE,
     "GINEncoder": GINEncoder,
     "GPSEncoder": GPSEncoder,
 }
@@ -45,12 +43,12 @@ _MODELS = {
 _LOSSES: dict[str, type[nn.Module]] = {
     "mse": nn.MSELoss,
     "abcd_constraint": ABCDConstraintPenaltyLoss,
-    "kl_divergence": KLDivergenceLoss,
     "supcon": MultiPositiveSupConLoss,
 }
 
 _SCALERS: dict[str, type] = {
     "ABCDConfigScaler": ABCDConfigScaler,
+    "ABCDIdentityConfigScaler": ABCDIdentityConfigScaler,
     "ABCDLogConfigScaler": ABCDLogConfigScaler,
     "ABCDNMaxConfigScaler": ABCDNMaxConfigScaler,
     "ABCDRelativeConfigScaler": ABCDRelativeConfigScaler,
@@ -158,28 +156,30 @@ def _build_loss(loss_cfg: dict) -> nn.Module:
     return _LOSSES[name](**loss_cfg.get("args", {}))
 
 
-def _attach_ordering_scaler(loss: nn.Module, config: dict) -> None:
+def _attach_ordering_scaler(loss: nn.Module, scaler: ABCDConfigScaler | None) -> None:
     """
-    Attach the data pipeline's scaler to a constraint loss that compares orderings in raw scale.
+    Attach ``scaler`` to a constraint loss that compares orderings in raw scale.
 
-    No-op unless ``loss`` is an :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss` with
-    ``ordering_penalties="raw"`` -- that mode denormalises predictions through the same scaler
-    the datamodule uses (see the loss docstring), so the two must be built from the same config.
+    No-op unless ``loss`` is an :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`, which
+    always denormalises predictions through the attached scaler (see the loss docstring). Fails
+    fast at build time rather than at the first forward pass when no scaler is available.
 
     :param loss: The regression loss instance built by :func:`_build_loss`.
-    :param config: Full resolved training config dict.
+    :param scaler: The scaler already built for the data pipeline (see :func:`_build_scaler`) --
+        pass the same instance the datamodule uses rather than rebuilding one, so the loss's
+        raw-space denormalisation can never silently drift from the pipeline's scaling.
     """
-    if isinstance(loss, ABCDConstraintPenaltyLoss) and loss.ordering_mode == "raw":
-        scaler = _build_scaler(config["data"].get("scaler"))
-        if scaler is None:
-            raise ValueError(
-                "ordering_penalties='raw' requires data.scaler to be set -- the loss "
-                "denormalises predictions through the same scaler the datamodule uses."
-            )
-        loss.set_scaler(scaler)
+    if not isinstance(loss, ABCDConstraintPenaltyLoss):
+        return
+    if scaler is None:
+        raise ValueError(
+            "ABCDConstraintPenaltyLoss requires data.scaler to be set -- it denormalises "
+            "predictions through the same scaler the datamodule uses."
+        )
+    loss.set_scaler(scaler)
 
 
-def build_supcon_wrapper(config: dict) -> DCBASupConWrapper:
+def build_supcon_wrapper(config: dict, scaler: ABCDConfigScaler | None = None) -> DCBASupConWrapper:
     """
     Build an untrained :class:`~dcba.wrappers.supcon.DCBASupConWrapper` from a resolved config.
 
@@ -190,22 +190,23 @@ def build_supcon_wrapper(config: dict) -> DCBASupConWrapper:
     :param config: Full resolved training config dict (as returned by
         :func:`~dcba.utils.config.load_config`), with ``config["training"]["wrapper"] ==
         "supcon"``.
+    :param scaler: Scaler to attach when the regression loss is an
+        :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss` (which always requires one).
+        :func:`train` passes the same instance it already built for the datamodule; external
+        callers that have not built one (e.g. ``scripts/embedding_stability.py``) may omit this,
+        in which case one is built here from ``config["data"]["scaler"]``.
 
     :returns: An untrained :class:`~dcba.wrappers.supcon.DCBASupConWrapper`.
     """
     training_cfg = config["training"]
     losses_cfg = training_cfg["losses"]
     reg_loss = _build_loss(losses_cfg["reg"])
-    _attach_ordering_scaler(reg_loss, config)
+    if scaler is None:
+        scaler = _build_scaler(config["data"].get("scaler"))
+    _attach_ordering_scaler(reg_loss, scaler)
     supcon_loss = _build_loss(losses_cfg["repr"])
     graph_encoder = _build_model(config["models"]["graph"])
     config_encoder = _build_model(config["models"]["theta"])
-    kl_cfg = losses_cfg.get("kl")
-    kl_loss = _build_loss(kl_cfg) if kl_cfg is not None else None
-    if kl_loss is not None and not isinstance(config_encoder, ConfigVAE):
-        raise TypeError(
-            f"kl_loss requires a ConfigVAE config encoder, got {type(config_encoder).__name__}."
-        )
     return DCBASupConWrapper(
         graph_encoder=graph_encoder,
         config_encoder=config_encoder,
@@ -213,9 +214,6 @@ def build_supcon_wrapper(config: dict) -> DCBASupConWrapper:
         reg_loss=reg_loss,
         supcon_loss=supcon_loss,
         lambda_supcon=losses_cfg["repr"].get("weight", 1.0),
-        kl_loss=kl_loss,
-        beta_kl=kl_cfg.get("beta", 1.0) if kl_cfg is not None else 1.0,
-        kl_warmup_epochs=kl_cfg.get("warmup_epochs", 0) if kl_cfg is not None else 0,
         aux_weight=training_cfg.get("aux_weight", 0.1),
     )
 
@@ -257,21 +255,14 @@ def train(config: dict) -> None:
         losses_cfg = training_cfg["losses"]
         encoder = _build_model(next(iter(config["models"].values())))
         loss_fn = _build_loss(losses_cfg["reg"])
-        _attach_ordering_scaler(loss_fn, config)
-        kl_cfg = losses_cfg.get("kl")
-        kl_loss = _build_loss(kl_cfg) if kl_cfg is not None else None
-        if kl_loss is not None and not isinstance(encoder, ConfigVAE):
-            raise TypeError(f"kl_loss requires a ConfigVAE encoder, got {type(encoder).__name__}.")
+        _attach_ordering_scaler(loss_fn, scaler)
         wrapper: pl.LightningModule = DCBAAutoencoderWrapper(
             encoder,
             training_cfg["optimizer"]["args"],
             loss_fn=loss_fn,
-            kl_loss=kl_loss,
-            beta_kl=kl_cfg.get("beta", 1.0) if kl_cfg is not None else 1.0,
-            kl_warmup_epochs=kl_cfg.get("warmup_epochs", 0) if kl_cfg is not None else 0,
         )
     elif wrapper_name == "supcon":
-        wrapper = build_supcon_wrapper(config)
+        wrapper = build_supcon_wrapper(config, scaler)
     else:
         raise ValueError(f"Unknown wrapper '{wrapper_name}'. Available: {list(_WRAPPERS)}")
 

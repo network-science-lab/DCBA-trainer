@@ -58,10 +58,6 @@ training:
       name: abcd_constraint
       args:
         lambda_penalty: 1.0
-        # 'raw' compares the ABCD generator's validity conditions (d_min <= d_max, c_max <= n,
-        # d_max <= n, nout <= n) in raw scale, denormalising predictions through this config's
-        # scaler; the legacy 'scaled' mode misfires on valid configs (see the loss docstring).
-        ordering_penalties: raw
         # weight_i = 1 + clip(regr_R2 - cross_R2, 0, 1) in ABCD_CONFIG_KEYS order, derived from
         # the gps-ae-supcon baseline's regression_metrics via scripts/derive_output_weights.py.
         weights: [1.028, 1.068, 1.959, 1.320, 1.034, 1.435, 1.473, 1.138, 1.029]
@@ -80,8 +76,7 @@ training:
   logger:
     project: dcba
     name: gps-ae-supcon-cluster-pool
-    tags:
-      [gps, no-community-features, abcd-constraint, bidirectional, cluster-pool, reweighted]
+    tags: [gps, no-community-features, abcd-constraint, bidirectional, cluster-pool, reweighted]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss

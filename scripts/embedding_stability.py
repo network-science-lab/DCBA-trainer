@@ -1,5 +1,5 @@
 # ruff: noqa
-"""Embedding stability analysis for gps-{ae,vae}-supcon runs logged to Weights & Biases.
+"""Embedding stability analysis for gps-ae-supcon runs logged to Weights & Biases.
 
 For each run in :data:`RUNS`, rebuilds the trained graph encoder (``z_g``) and config encoder
 (``z_theta``) from the run's logged config, downloads its best-epoch model checkpoint artifact,
@@ -54,7 +54,7 @@ from tqdm import tqdm
 
 from dcba.datamodule import ABCDDataModule
 from dcba.dataset import ABCDConfigScaler
-from dcba.dataset.transforms import ABCD_CONFIG_KEYS
+from dcba.dataset.scalers import ABCD_CONFIG_KEYS
 from dcba.training.loss import config_pairwise_distance
 from dcba.training.trainer import (
     _build_node_transform,
@@ -92,7 +92,7 @@ SEED = 42
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 PROJ_AXIS_LIM = 4.5
 
-#: (run_id, human-readable label) for the current gps-ae/vae-supcon comparison set.
+#: (run_id, human-readable label) for the current gps-ae-supcon comparison set.
 RUNS: list[tuple[str, str]] = [
     ("3or3wpqk", "gps-ae-supcon, no-community-features, batch64"),
     ("oraxoj6n", "gps-ae-supcon, no-community-features, batch64"),
@@ -198,7 +198,7 @@ def _load_wrapper(
     if training_cfg["wrapper"] != "supcon":
         raise ValueError(
             f"Unsupported wrapper '{training_cfg['wrapper']}' for run; only 'supcon' "
-            "(gps-ae/vae-supcon) is handled by this script."
+            "(gps-ae-supcon) is handled by this script."
         )
 
     scaler = _build_scaler(cfg["data"].get("scaler"))
@@ -391,9 +391,7 @@ def _project_umap(z: Tensor) -> Tensor:
     :returns: ``(N, 2)`` standardised projected coordinates.
     """
     n_neighbors = min(15, max(2, z.size(0) - 1))
-    reducer = umap.UMAP(
-        n_components=2, metric="cosine", n_neighbors=n_neighbors, random_state=SEED
-    )
+    reducer = umap.UMAP(n_components=2, metric="cosine", n_neighbors=n_neighbors, random_state=SEED)
     return _standardize_2d(torch.from_numpy(reducer.fit_transform(z.numpy())))
 
 
@@ -550,7 +548,9 @@ def _epanechnikov_density(x: np.ndarray, grid: np.ndarray) -> np.ndarray:
     return np.exp(kde.score_samples(grid.reshape(-1, 1)))
 
 
-def _stability_densities(d_embed: Tensor, same_group: Tensor, grid: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _stability_densities(
+    d_embed: Tensor, same_group: Tensor, grid: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     """Return ``(same_instance_density, different_instance_density)`` over ``grid``."""
     return (
         _epanechnikov_density(d_embed[same_group].numpy(), grid),
@@ -780,7 +780,9 @@ def main() -> None:
     device = torch.device(DEVICE)
     api = wandb.Api()
 
-    logger.info(f"{'run_id':<10} {'n':>5} {'corr(d_theta, d_zg)':>20} {'corr(d_theta, d_ztheta)':>24}  label")
+    logger.info(
+        f"{'run_id':<10} {'n':>5} {'corr(d_theta, d_zg)':>20} {'corr(d_theta, d_ztheta)':>24}  label"
+    )
     for run_id, run_name in RUNS:
         logger.info(f"Processing run {run_id} ({run_name})...")
         run = api.run(f"{WANDB_ENTITY}/{WANDB_PROJECT}/{run_id}")

@@ -1,23 +1,11 @@
 """Constraint-penalty augmented MSE loss for ABCD config reconstruction."""
 
-from typing import Protocol
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-#: Valid values for ``ABCDConstraintPenaltyLoss``'s ``ordering_penalties`` argument, after bool
-#: normalisation (``True -> "scaled"``, ``False -> "none"``).
-_ORDERING_MODES: tuple[str, ...] = ("scaled", "raw", "none")
-
-
-class _DenormalisingScaler(Protocol):
-    """Anything with a differentiable ``denormalise`` mapping scaled configs to raw scale."""
-
-    def denormalise(self, x: Tensor) -> Tensor:
-        """Map a normalised ``(..., 9)`` config tensor back to raw scale, without rounding."""
-        ...
+from dcba.dataset.scalers import ABCDBaseConfigScaler
 
 
 class ABCDConstraintPenaltyLoss(nn.Module):
@@ -37,74 +25,52 @@ class ABCDConstraintPenaltyLoss(nn.Module):
     - ``d_max <= n``
     - ``nout <= n``
 
-    ``ordering_penalties`` selects how (and whether) the ordering penalties are computed:
-
-    - ``"raw"`` (recommended): comparisons happen in **raw scale**, obtained by passing ``x_hat``
-      through the scaler's differentiable :meth:`denormalise` (attach the scaler with
-      :meth:`set_scaler`; the training entry point does this automatically). Each violation is
-      divided by the target's raw ``n`` so the hinge is dimensionless and O(1). Correct under any
-      scaler.
-    - ``"scaled"`` (legacy, default; also accepts ``True``): comparisons happen on the scaled
-      values directly. Only meaningful when the compared features share one scaling map -- under
-      :class:`~dcba.dataset.transforms.ABCDConfigScaler`'s per-feature bounds it misfires on
-      valid configs. Kept as the default only for comparability with already-trained runs; prefer
-      ``"raw"`` for new experiments.
-    - ``"none"`` (also accepts ``False``): ordering penalties disabled; the ``[0, 1]`` range
-      penalty stays. Sufficient on its own under
-      :class:`~dcba.dataset.transforms.ABCDRelativeConfigScaler`, where every ordering is
-      equivalent to ``scaled <= 1`` by construction.
+    Ordering comparisons always happen in **raw scale**, obtained by passing ``x_hat`` through
+    the attached scaler's differentiable
+    :meth:`~dcba.dataset.scalers.ABCDBaseConfigScaler.denormalise` (attach it with
+    :meth:`set_scaler`; the training entry point does this automatically). Each
+    violation is divided by the target's raw ``n`` so the hinge is dimensionless and O(1). This
+    is correct under any scaler.
 
     .. note::
         ``c_min <= c_max`` is deliberately not enforced here: every scaler expresses ``c_min`` as
-        ``c_min / c_max`` (see :class:`~dcba.dataset.transforms.ABCDConfigScaler`), so the
+        ``c_min / c_max`` (see :class:`~dcba.dataset.scalers.ABCDConfigScaler`), so the
         ordering is guaranteed by construction together with the range penalty.
 
     .. note::
         ``n`` (index 0) is exempt from the above-range penalty (``> 1`` in normalised space)
         to accommodate edge cases where the model predicts graphs larger than ``n_max``.
 
-    Feature indices follow :data:`~dcba.dataset.transforms.ABCD_CONFIG_KEYS`:
+    Feature indices follow :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS`:
     ``[n, t1, t2, xi, c_min, c_max, d_min, d_max, nout]`` -> indices 0-8.
 
     :param lambda_penalty: Weight applied to the sum of constraint penalty terms.
     :param weights: Optional per-feature weight applied to the squared error before averaging,
-        length 9 in :data:`~dcba.dataset.transforms.ABCD_CONFIG_KEYS` order. Use this to give
+        length 9 in :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS` order. Use this to give
         harder-to-reconstruct parameters more gradient priority. ``None`` (default) weights every
         feature equally, identical to plain MSE.
-    :param ordering_penalties: ``"raw"``, ``"scaled"`` or ``"none"`` -- see above. Booleans are
-        accepted for backwards compatibility (``True -> "scaled"``, ``False -> "none"``).
     """
 
     def __init__(
         self,
         lambda_penalty: float = 1.0,
         weights: list[float] | None = None,
-        ordering_penalties: bool | str = True,
     ) -> None:
         """Initialise the loss with the given penalty weight and optional per-feature weights."""
         super().__init__()
         self.lambda_penalty = lambda_penalty
-        if isinstance(ordering_penalties, bool):
-            ordering_penalties = "scaled" if ordering_penalties else "none"
-        if ordering_penalties not in _ORDERING_MODES:
-            raise ValueError(
-                f"ordering_penalties must be one of {_ORDERING_MODES} (or a bool), "
-                f"got {ordering_penalties!r}."
-            )
-        self.ordering_mode = ordering_penalties
-        self._scaler: _DenormalisingScaler | None = None
+        self._scaler: ABCDBaseConfigScaler | None = None
         self.register_buffer(
             "_weights", None if weights is None else torch.tensor(weights, dtype=torch.float32)
         )
 
-    def set_scaler(self, scaler: _DenormalisingScaler | None) -> None:
+    def set_scaler(self, scaler: ABCDBaseConfigScaler | None) -> None:
         """
         Attach the scaler whose :meth:`denormalise` maps ``x_hat`` to raw scale.
 
-        Required before the first forward pass when ``ordering_penalties="raw"``; ignored
-        otherwise. Kept out of the constructor so config-driven construction
-        (``_build_loss(args)``) stays purely declarative -- the training entry point attaches
-        the data pipeline's scaler after both are built.
+        Required before the first forward pass. Kept out of the constructor so config-driven
+        construction (``_build_loss(args)``) stays purely declarative -- the training entry point
+        attaches the data pipeline's scaler after both are built.
 
         :param scaler: Scaler providing a differentiable ``denormalise``, or ``None`` to detach.
         """
@@ -112,31 +78,24 @@ class ABCDConstraintPenaltyLoss(nn.Module):
 
     def _ordering_penalty(self, x_hat: Tensor, target: Tensor) -> Tensor:
         """
-        Compute the mean squared-hinge ordering penalty for ``x_hat`` per :attr:`ordering_mode`.
+        Compute the mean squared-hinge ordering penalty for ``x_hat`` in raw scale.
 
         :param x_hat: Reconstructed normalised config tensor of shape ``(batch, 9)``.
-        :param target: Ground-truth normalised config tensor of shape ``(batch, 9)``; in
-            ``"raw"`` mode its denormalised ``n`` provides the per-sample violation scale.
+        :param target: Ground-truth normalised config tensor of shape ``(batch, 9)``; its
+            denormalised ``n`` provides the per-sample violation scale.
 
-        :returns: Scalar penalty tensor (``0`` when the mode is ``"none"``).
+        :returns: Scalar penalty tensor.
         """
-        if self.ordering_mode == "none":
-            return x_hat.new_zeros(())
-
-        if self.ordering_mode == "raw":
-            if self._scaler is None:
-                raise RuntimeError(
-                    "ordering_penalties='raw' requires a scaler; call set_scaler() first."
-                )
-            values = self._scaler.denormalise(x_hat)
-            # Normalise by the TARGET's raw n: constant, strictly positive, and independent of the
-            # prediction, so the hinge stays linear with a correct-direction gradient and cannot
-            # blow up (dividing by the predicted n, or a self-normalising denominator, breaks one
-            # or the other).
-            scale = self._scaler.denormalise(target.detach())[:, 0].clamp(min=1.0)
-        else:
-            values = x_hat
-            scale = x_hat.new_ones(x_hat.shape[0])
+        if self._scaler is None:
+            raise RuntimeError(
+                "ABCDConstraintPenaltyLoss requires a scaler; call set_scaler() first."
+            )
+        values = self._scaler.denormalise(x_hat)
+        # Normalise by the TARGET's raw n: constant, strictly positive, and independent of the
+        # prediction, so the hinge stays linear with a correct-direction gradient and cannot
+        # blow up (dividing by the predicted n, or a self-normalising denominator, breaks one
+        # or the other).
+        scale = self._scaler.denormalise(target.detach())[:, 0].clamp(min=1.0)
 
         # d_min (idx 6) <= d_max (idx 7)
         d_order = F.relu((values[:, 6] - values[:, 7]) / scale) ** 2
