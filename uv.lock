@@ -620,7 +620,7 @@ dev = [
 
 [[package]]
 name = "dcba-data-set"
-version = "0.12.0"
+version = "0.11.1"
 source = { editable = "../DCBA-data-set" }
 dependencies = [
     { name = "bidict" },
@@ -662,10 +662,6 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-analysis = [
-    { name = "matplotlib", specifier = ">=3.8" },
-    { name = "transformers", specifier = ">=4.40" },
-]
 dev = [{ name = "pytest", specifier = ">=9.0.2" }]
 
 [[package]]
@@ -3182,7 +3178,7 @@ name = "triton"
 version = "3.1.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "filelock" },
+    { name = "filelock", marker = "python_full_version < '3.13'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/78/eb/65f5ba83c2a123f6498a3097746607e5b2f16add29e36765305e4ac7fdd8/triton-3.1.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:c8182f42fd8080a7d39d666814fa36c5e30cc00ea7eeeb1a2983dbb4c99a0fdc", size = 209551444, upload-time = "2024-10-14T16:05:53.433Z" },
