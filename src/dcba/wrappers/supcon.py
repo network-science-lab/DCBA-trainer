@@ -12,7 +12,7 @@ from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from lightning.pytorch.loggers import WandbLogger
 from torch import Tensor
 
-from dcba.dataset import ABCDConfigScaler
+from dcba.dataset import ABCDBaseConfigScaler
 from dcba.dataset.scalers import ABCD_CONFIG_KEYS
 from dcba.wrappers.base import DCBABaseWrapper
 
@@ -57,7 +57,7 @@ class DCBASupConWrapper(DCBABaseWrapper):
         reg_loss: nn.Module,
         supcon_loss: nn.Module,
         lambda_supcon: float = 1.0,
-        scaler: ABCDConfigScaler | None = None,
+        scaler: ABCDBaseConfigScaler | None = None,
         aux_weight: float = 0.1,
     ) -> None:
         """Initialise with both encoders, optimiser settings, and loss hyperparameters."""

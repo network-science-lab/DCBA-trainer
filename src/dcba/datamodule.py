@@ -8,7 +8,7 @@ from dcba_data_set.graph_io import load_dataset
 from torch_geometric.loader import DataLoader
 from torch_geometric.transforms import BaseTransform
 
-from dcba.dataset import ABCDConfigScaler, ABCDDataset
+from dcba.dataset import ABCDBaseConfigScaler, ABCDDataset
 
 
 class ABCDDataModule(pl.LightningDataModule):
@@ -45,7 +45,7 @@ class ABCDDataModule(pl.LightningDataModule):
         num_workers: int = 0,
         single_replica_per_instance: bool = True,
         seed: int = 42,
-        scaler: ABCDConfigScaler | None = None,
+        scaler: ABCDBaseConfigScaler | None = None,
         transform: BaseTransform | None = None,
         node_transform: BaseTransform | None = None,
     ) -> None:
@@ -59,7 +59,7 @@ class ABCDDataModule(pl.LightningDataModule):
         self._single_replica_per_instance = single_replica_per_instance
         self._seed = seed
 
-        self.scaler: ABCDConfigScaler | None = scaler
+        self.scaler: ABCDBaseConfigScaler | None = scaler
         self.transform: BaseTransform | None = transform
         self.node_transform: BaseTransform | None = node_transform
         self._train_dataset: ABCDDataset | None = None

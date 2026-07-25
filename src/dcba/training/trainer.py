@@ -8,9 +8,10 @@ from torch_geometric.transforms import BaseTransform
 
 from dcba.datamodule import ABCDDataModule
 from dcba.dataset import (
-    ABCDConfigScaler,
+    ABCDBaseConfigScaler,
     ABCDConfigSchema,
     ABCDConfigToTensor,
+    ABCDEmpiricalConfigScaler,
     ABCDIdentityConfigScaler,
     ABCDLogConfigScaler,
     ABCDNMaxConfigScaler,
@@ -47,7 +48,7 @@ _LOSSES: dict[str, type[nn.Module]] = {
 }
 
 _SCALERS: dict[str, type] = {
-    "ABCDConfigScaler": ABCDConfigScaler,
+    "ABCDEmpiricalConfigScaler": ABCDEmpiricalConfigScaler,
     "ABCDIdentityConfigScaler": ABCDIdentityConfigScaler,
     "ABCDLogConfigScaler": ABCDLogConfigScaler,
     "ABCDNMaxConfigScaler": ABCDNMaxConfigScaler,
@@ -68,7 +69,7 @@ _CONFIG_SCHEMAS: dict[str, type] = {
 }
 
 
-def _build_scaler(scaler_cfg: dict | None) -> ABCDConfigScaler | None:
+def _build_scaler(scaler_cfg: dict | None) -> ABCDBaseConfigScaler | None:
     """
     Instantiate a scaler from a config dict, or return ``None``.
 
@@ -156,7 +157,7 @@ def _build_loss(loss_cfg: dict) -> nn.Module:
     return _LOSSES[name](**loss_cfg.get("args", {}))
 
 
-def _attach_ordering_scaler(loss: nn.Module, scaler: ABCDConfigScaler | None) -> None:
+def _attach_ordering_scaler(loss: nn.Module, scaler: ABCDBaseConfigScaler | None) -> None:
     """
     Attach ``scaler`` to a constraint loss that compares orderings in raw scale.
 
@@ -179,7 +180,9 @@ def _attach_ordering_scaler(loss: nn.Module, scaler: ABCDConfigScaler | None) ->
     loss.set_scaler(scaler)
 
 
-def build_supcon_wrapper(config: dict, scaler: ABCDConfigScaler | None = None) -> DCBASupConWrapper:
+def build_supcon_wrapper(
+    config: dict, scaler: ABCDBaseConfigScaler | None = None
+) -> DCBASupConWrapper:
     """
     Build an untrained :class:`~dcba.wrappers.supcon.DCBASupConWrapper` from a resolved config.
 

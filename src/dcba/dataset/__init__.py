@@ -4,16 +4,16 @@ from dcba.dataset.dcba_dataset import ABCDDataset
 from dcba.dataset.scalers import (
     ABCD_CONFIG_KEYS,
     ABCD_INT_FEATURE_INDICES,
+    ABCD_NMAX_BOUNDS,
+    ABCD_PARAM_BOUNDS,
     ABCDBaseConfigScaler,
-    ABCDConfigScaler,
     ABCDConfigSchema,
     ABCDConfigToTensor,
+    ABCDEmpiricalConfigScaler,
     ABCDIdentityConfigScaler,
     ABCDLogConfigScaler,
     ABCDNMaxConfigScaler,
     ABCDRelativeConfigScaler,
-    abcd_nmax_bounds,
-    abcd_param_bounds,
 )
 from dcba.dataset.transforms import CommunityToSize, ConstantNodeFeatures
 
@@ -22,7 +22,7 @@ __all__ = [
     "ABCDBaseConfigScaler",
     "ABCDConfigSchema",
     "ABCDConfigToTensor",
-    "ABCDConfigScaler",
+    "ABCDEmpiricalConfigScaler",
     "ABCDIdentityConfigScaler",
     "ABCDLogConfigScaler",
     "ABCDNMaxConfigScaler",
@@ -31,6 +31,6 @@ __all__ = [
     "ConstantNodeFeatures",
     "ABCD_CONFIG_KEYS",
     "ABCD_INT_FEATURE_INDICES",
-    "abcd_nmax_bounds",
-    "abcd_param_bounds",
+    "ABCD_NMAX_BOUNDS",
+    "ABCD_PARAM_BOUNDS",
 ]

@@ -9,12 +9,9 @@ class CommunityToSize(BaseTransform):
     """
     Convert raw community IDs to normalised community-size node features.
 
-    For each node and each layer, computes the fraction of *active* nodes
-    (``community != 0``) that share the same community label.  Inactive nodes
-    (``community == 0``, mABCD only) receive ``0.0``.
-
-    Writes a float tensor of shape ``[num_actors, num_layers]`` into
-    ``data["actor"].x``, replacing any existing value.
+    For each node/layer, computes the fraction of active nodes (``community != 0``) sharing that
+    node's community label; inactive nodes get ``0.0``. Writes shape ``[num_actors, num_layers]``
+    into ``data["actor"].x``.
     """
 
     def forward(self, data: DCBAHeteroData) -> DCBAHeteroData:
@@ -44,13 +41,9 @@ class CommunityToSize(BaseTransform):
 
 class ConstantNodeFeatures(BaseTransform):
     """
-    Set node features to a constant, carrying no community information at all.
+    Set node features to a constant (no community information).
 
-    Ablation baseline for :class:`CommunityToSize`, to isolate how much of the graph encoder's
-    predictive power actually comes from the community-size feature versus pure graph structure.
-    Writes a tensor of ones with the same shape ``[num_actors, num_layers]`` that
-    :class:`CommunityToSize` would produce, so :class:`~dcba.models.gps_encoder.GPSEncoder` needs
-    no changes to consume it.
+    Writes ones of shape ``[num_actors, num_layers]``, matching :class:`CommunityToSize`'s output.
     """
 
     def forward(self, data: DCBAHeteroData) -> DCBAHeteroData:

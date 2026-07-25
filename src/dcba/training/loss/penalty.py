@@ -5,50 +5,38 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from dcba.dataset.scalers import ABCDBaseConfigScaler
+from dcba.dataset.scalers import ABCDBaseConfigScaler, ABCDIdentityConfigScaler
 
 
 class ABCDConstraintPenaltyLoss(nn.Module):
     """
-    MSE reconstruction loss augmented with squared-hinge penalties for ABCD config constraints.
+    MSE reconstruction loss plus squared-hinge penalties for ABCD config constraints.
 
-    The total loss is::
+    Total loss: ``weighted_MSE(x_hat, target) + lambda * sum(relu(violation)^2)``.
 
-        weighted_MSE(x_hat, target) + lambda * sum(relu(violation)^2)
+    Per-feature range penalties keep every predicted feature in ``[0, 1]``. Ordering penalties
+    enforce, in raw scale via the attached scaler's :meth:`denormalise` (attach with
+    :meth:`set_scaler`):
 
-    Per-feature range penalties ensure every predicted feature stays within ``[0, 1]``
-    (normalised space). Cross-parameter ordering penalties enforce the structural constraints
-    the ABCD generator requires to run at all:
-
+    - ``c_min <= c_max``
     - ``d_min <= d_max``
     - ``c_max <= n``
     - ``d_max <= n``
     - ``nout <= n``
 
-    Ordering comparisons always happen in **raw scale**, obtained by passing ``x_hat`` through
-    the attached scaler's differentiable
-    :meth:`~dcba.dataset.scalers.ABCDBaseConfigScaler.denormalise` (attach it with
-    :meth:`set_scaler`; the training entry point does this automatically). Each
-    violation is divided by the target's raw ``n`` so the hinge is dimensionless and O(1). This
-    is correct under any scaler.
+    Violations are divided by the target's raw ``n`` to keep the hinge dimensionless.
 
     .. note::
-        ``c_min <= c_max`` is deliberately not enforced here: every scaler expresses ``c_min`` as
-        ``c_min / c_max`` (see :class:`~dcba.dataset.scalers.ABCDConfigScaler`), so the
-        ordering is guaranteed by construction together with the range penalty.
+        ``n`` is exempt from the above-range penalty, to allow predictions above ``n_max``.
+        Under :class:`~dcba.dataset.scalers.ABCDIdentityConfigScaler` the whole above-range
+        penalty is skipped, since its features stay in raw scale and exceed ``1`` by design.
 
-    .. note::
-        ``n`` (index 0) is exempt from the above-range penalty (``> 1`` in normalised space)
-        to accommodate edge cases where the model predicts graphs larger than ``n_max``.
+    Feature order follows :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS`.
 
-    Feature indices follow :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS`:
-    ``[n, t1, t2, xi, c_min, c_max, d_min, d_max, nout]`` -> indices 0-8.
-
-    :param lambda_penalty: Weight applied to the sum of constraint penalty terms.
-    :param weights: Optional per-feature weight applied to the squared error before averaging,
-        length 9 in :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS` order. Use this to give
-        harder-to-reconstruct parameters more gradient priority. ``None`` (default) weights every
-        feature equally, identical to plain MSE.
+    :param lambda_penalty: Weight applied to the penalty terms.
+    :param weights: Optional per-feature weight for the squared error, length 9 in
+        :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS` order. ``None`` weights every feature
+        equally (plain MSE).
     """
 
     def __init__(
@@ -67,10 +55,6 @@ class ABCDConstraintPenaltyLoss(nn.Module):
     def set_scaler(self, scaler: ABCDBaseConfigScaler | None) -> None:
         """
         Attach the scaler whose :meth:`denormalise` maps ``x_hat`` to raw scale.
-
-        Required before the first forward pass. Kept out of the constructor so config-driven
-        construction (``_build_loss(args)``) stays purely declarative -- the training entry point
-        attaches the data pipeline's scaler after both are built.
 
         :param scaler: Scaler providing a differentiable ``denormalise``, or ``None`` to detach.
         """
@@ -97,6 +81,8 @@ class ABCDConstraintPenaltyLoss(nn.Module):
         # or the other).
         scale = self._scaler.denormalise(target.detach())[:, 0].clamp(min=1.0)
 
+        # c_min (idx 4) <= c_max (idx 5)
+        c_order = F.relu((values[:, 4] - values[:, 5]) / scale) ** 2
         # d_min (idx 6) <= d_max (idx 7)
         d_order = F.relu((values[:, 6] - values[:, 7]) / scale) ** 2
         # c_max (idx 5) <= n (idx 0)
@@ -105,7 +91,7 @@ class ABCDConstraintPenaltyLoss(nn.Module):
         d_max_n = F.relu((values[:, 7] - values[:, 0]) / scale) ** 2
         # nout (idx 8) <= n (idx 0)
         nout_n = F.relu((values[:, 8] - values[:, 0]) / scale) ** 2
-        return (d_order + c_max_n + d_max_n + nout_n).mean()
+        return (c_order + d_order + c_max_n + d_max_n + nout_n).mean()
 
     def forward(self, x_hat: Tensor, target: Tensor) -> Tensor:
         """
@@ -125,8 +111,12 @@ class ABCDConstraintPenaltyLoss(nn.Module):
         # n (idx 0) is exempt from the above-range check -- the model may predict n > n_max
         # in edge cases with larger networks, which we do not want to penalise.
         below = F.relu(-x_hat)
-        above = F.relu(x_hat[:, 1:] - 1.0)  # features 1-8 only
-        range_penalty = (below**2).sum(dim=1).mean() + (above**2).sum(dim=1).mean()
+        if isinstance(self._scaler, ABCDIdentityConfigScaler):
+            # Raw-scale features exceed 1 by design, so only the below-zero half applies.
+            range_penalty = (below**2).sum(dim=1).mean()
+        else:
+            above = F.relu(x_hat[:, 1:] - 1.0)  # features 1-8 only
+            range_penalty = (below**2).sum(dim=1).mean() + (above**2).sum(dim=1).mean()
 
         penalty = range_penalty + self._ordering_penalty(x_hat, target)
         return mse + self.lambda_penalty * penalty

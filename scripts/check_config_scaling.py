@@ -1,8 +1,8 @@
 # ruff: noqa
-"""Check whether ABCDConfigScaler's bounds match each parameter's real dynamic range.
+"""Check whether ABCDEmpiricalConfigScaler's bounds match each parameter's real dynamic range.
 
-:class:`~dcba.dataset.scalers.ABCDConfigScaler` maps every ABCD parameter to ``[0, 1]`` using
-:func:`~dcba.dataset.scalers.abcd_param_bounds`. Six of the nine parameters
+:class:`~dcba.dataset.scalers.ABCDEmpiricalConfigScaler` maps every ABCD parameter to ``[0, 1]``
+using :data:`~dcba.dataset.scalers.ABCD_PARAM_BOUNDS`. Six of the nine parameters
 (``n, c_min, c_max, d_min, d_max, nout``) share the same analytical upper bound (``n_max``), even
 though their realised values in an actual dataset can occupy wildly different fractions of that
 shared bound. A parameter that ends up compressed into a tiny sliver of ``[0, 1]`` gets almost no
@@ -13,7 +13,7 @@ architecture.
 This script loads a dataset's raw (unscaled) configs, computes each parameter's realised standard
 deviation as a percentage of its scaler bound width, and flags parameters below
 :data:`STARVED_THRESHOLD_PCT` as starved. It requires no trained model or W&B access -- only the
-dataset -- so it can be re-run after any change to :func:`abcd_param_bounds` to check the fix
+dataset -- so it can be re-run after any change to :data:`ABCD_PARAM_BOUNDS` to check the fix
 before spending time on training.
 
 Usage:
@@ -32,7 +32,7 @@ from dcba_data_set.graph_io import load_dataset
 from dcba_data_set.graph_io.data_models import DCBAInstanceConfig
 from torch import Tensor
 
-from dcba.dataset.scalers import ABCD_CONFIG_KEYS, ABCDConfigToTensor, abcd_param_bounds
+from dcba.dataset.scalers import ABCD_CONFIG_KEYS, ABCD_PARAM_BOUNDS, ABCDConfigToTensor
 from dcba.utils.paths import DATA_ROOT
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -101,14 +101,17 @@ def _occupied_range_pct(raw_configs: Tensor) -> dict[str, float]:
     :returns: Dict mapping each key in :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS` to the
         percentage of its scaler bound width covered by one standard deviation of real data.
     """
-    bounds = abcd_param_bounds()
+    bounds = ABCD_PARAM_BOUNDS
     c_min_idx = ABCD_CONFIG_KEYS.index("c_min")
     c_max_idx = ABCD_CONFIG_KEYS.index("c_max")
+    d_min_idx = ABCD_CONFIG_KEYS.index("d_min")
+    d_max_idx = ABCD_CONFIG_KEYS.index("d_max")
 
-    # c_min is scaled as c_min / c_max (see ABCDConfigScaler), not against a fixed bound like
-    # every other feature -- its "raw" value for occupancy purposes is that ratio, not the count.
+    # c_min and d_min are anchored to their constraint partners (see ABCDEmpiricalConfigScaler),
+    # not to a fixed bound -- their "raw" value for occupancy purposes is that ratio, not the count.
     values = raw_configs.clone()
     values[:, c_min_idx] = raw_configs[:, c_min_idx] / raw_configs[:, c_max_idx].clamp(min=1.0)
+    values[:, d_min_idx] = raw_configs[:, d_min_idx] / raw_configs[:, d_max_idx].clamp(min=1.0)
 
     std = values.std(dim=0, unbiased=False)
     occupied = {}

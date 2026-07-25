@@ -53,7 +53,7 @@ from torch_geometric.loader import DataLoader as PyGDataLoader
 from tqdm import tqdm
 
 from dcba.datamodule import ABCDDataModule
-from dcba.dataset import ABCDConfigScaler
+from dcba.dataset import ABCDBaseConfigScaler
 from dcba.dataset.scalers import ABCD_CONFIG_KEYS
 from dcba.training.loss import config_pairwise_distance
 from dcba.training.trainer import (
@@ -184,7 +184,7 @@ def _download_checkpoint(run: wandb.apis.public.Run, cache_dir: Path) -> Path:
 
 def _load_wrapper(
     cfg: dict, ckpt_path: Path, device: torch.device
-) -> tuple[DCBASupConWrapper, ABCDConfigScaler | None]:
+) -> tuple[DCBASupConWrapper, ABCDBaseConfigScaler | None]:
     """
     Rebuild the supcon wrapper's architecture from a run config, then load checkpoint weights.
 
@@ -214,7 +214,7 @@ def _load_wrapper(
 @torch.no_grad()
 def _collect_embeddings(
     wrapper: DCBASupConWrapper,
-    scaler: ABCDConfigScaler | None,
+    scaler: ABCDBaseConfigScaler | None,
     cfg: dict,
     run_id: str,
     run_name: str,
