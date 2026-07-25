@@ -522,6 +522,20 @@ class TestABCDConstraintPenaltyLossOrdering:
         loss = self._loss_with(scaler)(x_hat, x_hat)
         assert loss.item() == 0.0
 
+    def test_identity_scaler_has_no_above_range_penalty(self) -> None:
+        """Its features stay raw, so penalising them for exceeding 1 would floor the loss."""
+        scaler = ABCDIdentityConfigScaler()
+        raw = self._valid_raw()
+        assert self._loss_with(scaler)(raw, raw).item() == 0.0
+
+    def test_identity_scaler_still_penalises_negative_predictions(self) -> None:
+        """Only the above-1 half is skipped; negative raw features remain nonsense."""
+        scaler = ABCDIdentityConfigScaler()
+        raw = self._valid_raw()
+        x_hat = raw.clone()
+        x_hat[:, 5] = -10.0  # negative c_max
+        assert self._loss_with(scaler)(x_hat, raw).item() > 0.0
+
     def test_c_min_c_max_violation_penalised_under_nmax_scaler(self) -> None:
         """ABCDNMaxConfigScaler doesn't ratio c_min, so a genuine violation must be caught."""
         from dcba.dataset.scalers import ABCDNMaxConfigScaler

@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from dcba.dataset.scalers import ABCDBaseConfigScaler
+from dcba.dataset.scalers import ABCDBaseConfigScaler, ABCDIdentityConfigScaler
 
 
 class ABCDConstraintPenaltyLoss(nn.Module):
@@ -28,6 +28,8 @@ class ABCDConstraintPenaltyLoss(nn.Module):
 
     .. note::
         ``n`` is exempt from the above-range penalty, to allow predictions above ``n_max``.
+        Under :class:`~dcba.dataset.scalers.ABCDIdentityConfigScaler` the whole above-range
+        penalty is skipped, since its features stay in raw scale and exceed ``1`` by design.
 
     Feature order follows :data:`~dcba.dataset.scalers.ABCD_CONFIG_KEYS`.
 
@@ -109,8 +111,12 @@ class ABCDConstraintPenaltyLoss(nn.Module):
         # n (idx 0) is exempt from the above-range check -- the model may predict n > n_max
         # in edge cases with larger networks, which we do not want to penalise.
         below = F.relu(-x_hat)
-        above = F.relu(x_hat[:, 1:] - 1.0)  # features 1-8 only
-        range_penalty = (below**2).sum(dim=1).mean() + (above**2).sum(dim=1).mean()
+        if isinstance(self._scaler, ABCDIdentityConfigScaler):
+            # Raw-scale features exceed 1 by design, so only the below-zero half applies.
+            range_penalty = (below**2).sum(dim=1).mean()
+        else:
+            above = F.relu(x_hat[:, 1:] - 1.0)  # features 1-8 only
+            range_penalty = (below**2).sum(dim=1).mean() + (above**2).sum(dim=1).mean()
 
         penalty = range_penalty + self._ordering_penalty(x_hat, target)
         return mse + self.lambda_penalty * penalty
