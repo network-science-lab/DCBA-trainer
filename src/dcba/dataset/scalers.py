@@ -47,7 +47,7 @@ ABCD_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "xi": (0.0, 1.0),  # 0 <= xi <= 1 (hard constraint)
     "c_min": (0.0, 1.0),  # fraction of c_max -- see ABCDEmpiricalConfigScaler
     "c_max": (1.0, 6_000.0),  # observed max ~4938 on abcd-big
-    "d_min": (0.0, 1.0),  # log-exponent of d_max -- see ABCDEmpiricalConfigScaler
+    "d_min": (0.0, 1.0),  # fraction of d_max -- see ABCDEmpiricalConfigScaler
     "d_max": (1.0, 6_000.0),  # observed max ~4993 on abcd-big
     "nout": (0.0, 700.0),  # observed max ~492 on abcd-big
 }
@@ -67,57 +67,62 @@ ABCD_NMAX_BOUNDS: dict[str, tuple[float, float]] = {
 }
 
 
-def _scale_c_min(x: Tensor) -> Tensor:
+def _scale_ratio(x: Tensor, key: str, anchor_key: str) -> Tensor:
     """
-    Compute ``c_min`` as a fraction of raw ``c_max`` (clamped >= 1 to avoid a div by zero).
+    Compute ``key`` as a fraction of its raw anchor (clamped >= 1 to avoid a div by zero).
 
     :param x: Float tensor of shape ``(..., 9)``, raw (unscaled) feature values.
+    :param key: Feature to scale, e.g. ``"c_min"``.
+    :param anchor_key: Feature to scale it against, e.g. ``"c_max"``.
 
-    :returns: Normalised ``c_min`` column, shape ``(...,)``.
+    :returns: Normalised ``key`` column, shape ``(...,)``.
     """
-    c_max_raw = x[..., ABCD_CONFIG_IDX["c_max"]].clamp(min=1.0)
-    return x[..., ABCD_CONFIG_IDX["c_min"]] / c_max_raw
+    anchor_raw = x[..., ABCD_CONFIG_IDX[anchor_key]].clamp(min=1.0)
+    return x[..., ABCD_CONFIG_IDX[key]] / anchor_raw
 
 
-def _unscale_c_min(x: Tensor, c_max_raw: Tensor) -> Tensor:
+def _unscale_ratio(x: Tensor, key: str, anchor_raw: Tensor) -> Tensor:
     """
-    Recover raw ``c_min`` from its ``c_min / c_max`` ratio.
+    Recover raw ``key`` from its ``key / anchor`` ratio.
 
-    :param x: Normalised float tensor of shape ``(..., 9)`` (only its ``c_min`` column is read).
-    :param c_max_raw: Already-recovered raw ``c_max``. Clamp before calling if needed; not
-        applied here.
+    :param x: Normalised float tensor of shape ``(..., 9)`` (only its ``key`` column is read).
+    :param key: Feature to recover, e.g. ``"c_min"``.
+    :param anchor_raw: Already-recovered raw anchor. Clamp before calling if needed; not applied
+        here.
 
-    :returns: Raw ``c_min`` column, shape ``(...,)``.
+    :returns: Raw ``key`` column, shape ``(...,)``.
     """
-    return x[..., ABCD_CONFIG_IDX["c_min"]] * c_max_raw
+    return x[..., ABCD_CONFIG_IDX[key]] * anchor_raw
 
 
-def _scale_d_min(x: Tensor) -> Tensor:
+def _scale_log_ratio(x: Tensor, key: str, anchor_key: str) -> Tensor:
     """
-    Compute ``d_min`` as the exponent ``s`` in ``d_min = d_max ** s``.
+    Compute ``key`` as the exponent ``s`` in ``key = anchor ** s``.
 
-    ``d_max`` clamped >= 2 so ``log(d_max) > 0``; only reachable on degenerate raw configs.
+    Anchor clamped >= 2 so its log is positive; only reachable on degenerate raw configs.
 
     :param x: Float tensor of shape ``(..., 9)``, raw (unscaled) feature values.
+    :param key: Feature to scale, e.g. ``"d_min"``.
+    :param anchor_key: Feature to scale it against, e.g. ``"d_max"``.
 
-    :returns: Normalised ``d_min`` column, shape ``(...,)``.
+    :returns: Normalised ``key`` column, shape ``(...,)``.
     """
-    return torch.log(x[..., ABCD_CONFIG_IDX["d_min"]].clamp(min=1.0)) / torch.log(
-        x[..., ABCD_CONFIG_IDX["d_max"]].clamp(min=2.0)
+    return torch.log(x[..., ABCD_CONFIG_IDX[key]].clamp(min=1.0)) / torch.log(
+        x[..., ABCD_CONFIG_IDX[anchor_key]].clamp(min=2.0)
     )
 
 
-def _unscale_d_min(x: Tensor, d_max_raw: Tensor) -> Tensor:
+def _unscale_log_ratio(x: Tensor, key: str, anchor_raw: Tensor) -> Tensor:
     """
-    Recover raw ``d_min`` from its ``log(d_min) / log(d_max)`` exponent.
+    Recover raw ``key`` from its ``log(key) / log(anchor)`` exponent.
 
-    :param x: Normalised float tensor of shape ``(..., 9)`` (only its ``d_min`` column is read).
-    :param d_max_raw: Already-recovered raw ``d_max``. Clamp before calling if needed; not
-        applied here.
+    :param x: Normalised float tensor of shape ``(..., 9)`` (only its ``key`` column is read).
+    :param key: Feature to recover, e.g. ``"d_min"``.
+    :param anchor_raw: Already-recovered raw anchor, clamped >= 2 here.
 
-    :returns: Raw ``d_min`` column, shape ``(...,)``.
+    :returns: Raw ``key`` column, shape ``(...,)``.
     """
-    return d_max_raw.clamp(min=2.0) ** x[..., ABCD_CONFIG_IDX["d_min"]]
+    return anchor_raw.clamp(min=2.0) ** x[..., ABCD_CONFIG_IDX[key]]
 
 
 class ABCDBaseConfigScaler:
@@ -126,7 +131,7 @@ class ABCDBaseConfigScaler:
 
     Provides the integer-rounding :meth:`inverse_transform` and :meth:`__call__`, used by every
     scaler. Subclasses implement :meth:`transform`/:meth:`denormalise`; the ``c_min``/``d_min``
-    ratio helpers used by some of them are module-level functions (:func:`_scale_c_min` etc.),
+    anchoring helpers used by some of them are module-level functions (:func:`_scale_ratio` etc.),
     not part of this base class, since not every scaler needs them.
     """
 
@@ -163,8 +168,8 @@ class ABCDEmpiricalConfigScaler(ABCDBaseConfigScaler):
     Normalise and denormalise ABCD config tensors feature-wise to ``[0, 1]``.
 
     Linear (min-max) map per feature from :data:`ABCD_PARAM_BOUNDS`, except ``c_min`` and
-    ``d_min``, anchored to their true constraint partners as ``c_min / c_max`` and
-    ``log(d_min) / log(d_max)``. The inverse is exact.
+    ``d_min``, scaled as fractions of their true constraint partners: ``c_min / c_max`` and
+    ``d_min / d_max``. The inverse is exact.
     """
 
     def __init__(self) -> None:
@@ -186,8 +191,8 @@ class ABCDEmpiricalConfigScaler(ABCDBaseConfigScaler):
         :returns: Normalised tensor of the same shape.
         """
         out = (x - self._lo) / (self._hi - self._lo)
-        out[..., ABCD_CONFIG_IDX["d_min"]] = _scale_d_min(x)
-        out[..., ABCD_CONFIG_IDX["c_min"]] = _scale_c_min(x)
+        out[..., ABCD_CONFIG_IDX["d_min"]] = _scale_ratio(x, "d_min", "d_max")
+        out[..., ABCD_CONFIG_IDX["c_min"]] = _scale_ratio(x, "c_min", "c_max")
         return out
 
     def denormalise(self, x: Tensor) -> Tensor:
@@ -206,17 +211,17 @@ class ABCDEmpiricalConfigScaler(ABCDBaseConfigScaler):
         cols = list(lin.unbind(dim=-1))
         # d_max/c_max must already be in their final (raw) scale before d_min/c_min can be
         # recovered from them.
-        cols[ABCD_CONFIG_IDX["d_min"]] = _unscale_d_min(x, cols[ABCD_CONFIG_IDX["d_max"]])
-        cols[ABCD_CONFIG_IDX["c_min"]] = _unscale_c_min(x, cols[ABCD_CONFIG_IDX["c_max"]])
+        cols[ABCD_CONFIG_IDX["d_min"]] = _unscale_ratio(x, "d_min", cols[ABCD_CONFIG_IDX["d_max"]])
+        cols[ABCD_CONFIG_IDX["c_min"]] = _unscale_ratio(x, "c_min", cols[ABCD_CONFIG_IDX["c_max"]])
         return torch.stack(cols, dim=-1)
 
 
 class ABCDNMaxConfigScaler(ABCDBaseConfigScaler):
     """
-    Legacy linear scaler: every feature, including ``c_min``, divides by a shared ``10_000``.
+    Legacy linear scaler: every feature divides by a shared ``10_000``.
 
-    Uses :data:`ABCD_NMAX_BOUNDS`. ``c_min`` is not a ``c_min/c_max`` ratio here, so the base
-    class's ``_scale_c_min``/``_unscale_c_min`` helpers are unused. The inverse is exact.
+    Uses :data:`ABCD_NMAX_BOUNDS`. ``c_min`` and ``d_min`` are not anchored to their constraint
+    partners here, so the :func:`_scale_ratio` helpers are unused. The inverse is exact.
     """
 
     def __init__(self) -> None:
@@ -259,8 +264,9 @@ class ABCDLogConfigScaler(ABCDBaseConfigScaler):
     Log-compresses size-like features against `n`.
 
     ``c_max``, ``d_max``, ``nout`` as ``log1p(x) / log1p(n)``; `n` as
-    ``log1p(n) / log1p(10_000)``. `t1`, `t2`, `xi`, `c_min`, `d_min` keep
-    :class:`ABCDEmpiricalConfigScaler`'s treatment. The inverse is exact.
+    ``log1p(n) / log1p(10_000)``; `d_min` as ``log(d_min) / log(d_max)`` (its true constraint
+    partner). `t1`, `t2`, `xi`, `c_min` keep :class:`ABCDEmpiricalConfigScaler`'s treatment.
+    The inverse is exact.
     """
 
     def __init__(self) -> None:
@@ -295,8 +301,8 @@ class ABCDLogConfigScaler(ABCDBaseConfigScaler):
             x[..., ABCD_CONFIG_LOG_IDX].clamp(min=0.0)
         ) / log_n.unsqueeze(-1)
 
-        out[..., ABCD_CONFIG_IDX["d_min"]] = _scale_d_min(x)
-        out[..., ABCD_CONFIG_IDX["c_min"]] = _scale_c_min(x)
+        out[..., ABCD_CONFIG_IDX["d_min"]] = _scale_log_ratio(x, "d_min", "d_max")
+        out[..., ABCD_CONFIG_IDX["c_min"]] = _scale_ratio(x, "c_min", "c_max")
         return out
 
     def denormalise(self, x: Tensor) -> Tensor:
@@ -322,9 +328,11 @@ class ABCDLogConfigScaler(ABCDBaseConfigScaler):
             cols[i] = lin[..., j]
         for j, i in enumerate(ABCD_CONFIG_LOG_IDX):
             cols[i] = logs[..., j]
-        cols[ABCD_CONFIG_IDX["d_min"]] = _unscale_d_min(x, cols[ABCD_CONFIG_IDX["d_max"]])
-        cols[ABCD_CONFIG_IDX["c_min"]] = _unscale_c_min(
-            x, cols[ABCD_CONFIG_IDX["c_max"]].clamp(min=1.0)
+        cols[ABCD_CONFIG_IDX["d_min"]] = _unscale_log_ratio(
+            x, "d_min", cols[ABCD_CONFIG_IDX["d_max"]]
+        )
+        cols[ABCD_CONFIG_IDX["c_min"]] = _unscale_ratio(
+            x, "c_min", cols[ABCD_CONFIG_IDX["c_max"]].clamp(min=1.0)
         )
         return torch.stack(cols, dim=-1)
 
@@ -378,8 +386,8 @@ class ABCDRelativeConfigScaler(ABCDBaseConfigScaler):
             x[..., ABCD_CONFIG_IDX["nout"]].clamp(min=0.0)
         ) / torch.log1p(n_raw)
 
-        out[..., ABCD_CONFIG_IDX["d_min"]] = _scale_d_min(x)
-        out[..., ABCD_CONFIG_IDX["c_min"]] = _scale_c_min(x)
+        out[..., ABCD_CONFIG_IDX["d_min"]] = _scale_log_ratio(x, "d_min", "d_max")
+        out[..., ABCD_CONFIG_IDX["c_min"]] = _scale_ratio(x, "c_min", "c_max")
         return out
 
     def denormalise(self, x: Tensor) -> Tensor:
@@ -411,8 +419,8 @@ class ABCDRelativeConfigScaler(ABCDBaseConfigScaler):
         cols[ABCD_CONFIG_IDX["nout"]] = torch.expm1(
             x[..., ABCD_CONFIG_IDX["nout"]] * torch.log1p(n_raw)
         )
-        cols[ABCD_CONFIG_IDX["d_min"]] = _unscale_d_min(x, d_max_raw)
-        cols[ABCD_CONFIG_IDX["c_min"]] = _unscale_c_min(x, c_max_raw.clamp(min=1.0))
+        cols[ABCD_CONFIG_IDX["d_min"]] = _unscale_log_ratio(x, "d_min", d_max_raw)
+        cols[ABCD_CONFIG_IDX["c_min"]] = _unscale_ratio(x, "c_min", c_max_raw.clamp(min=1.0))
         return torch.stack(cols, dim=-1)
 
 

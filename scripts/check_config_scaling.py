@@ -111,9 +111,7 @@ def _occupied_range_pct(raw_configs: Tensor) -> dict[str, float]:
     # not to a fixed bound -- their "raw" value for occupancy purposes is that ratio, not the count.
     values = raw_configs.clone()
     values[:, c_min_idx] = raw_configs[:, c_min_idx] / raw_configs[:, c_max_idx].clamp(min=1.0)
-    values[:, d_min_idx] = torch.log(raw_configs[:, d_min_idx].clamp(min=1.0)) / torch.log(
-        raw_configs[:, d_max_idx].clamp(min=2.0)
-    )
+    values[:, d_min_idx] = raw_configs[:, d_min_idx] / raw_configs[:, d_max_idx].clamp(min=1.0)
 
     std = values.std(dim=0, unbiased=False)
     occupied = {}

@@ -64,13 +64,13 @@ class TestABCDEmpiricalConfigScaler:
         expected = raw[:, c_min_idx] / raw[:, ABCD_CONFIG_KEYS.index("c_max")]
         assert torch.allclose(scaled[:, c_min_idx], expected, atol=1e-6)
 
-    def test_d_min_is_log_exponent_of_d_max(self) -> None:
-        """d_min is anchored on d_max (its true constraint partner), not on a fixed bound."""
+    def test_d_min_is_ratio_to_d_max(self) -> None:
+        """d_min is scaled as d_min / d_max, guaranteeing d_min <= d_max by construction."""
         scaler = ABCDEmpiricalConfigScaler()
         raw = _raw_batch()
         scaled = scaler.transform(raw)
         d_min_idx = ABCD_CONFIG_KEYS.index("d_min")
-        expected = torch.log(raw[:, d_min_idx]) / torch.log(raw[:, ABCD_CONFIG_KEYS.index("d_max")])
+        expected = raw[:, d_min_idx] / raw[:, ABCD_CONFIG_KEYS.index("d_max")]
         assert torch.allclose(scaled[:, d_min_idx], expected, atol=1e-6)
 
     def test_denormalise_is_differentiable(self) -> None:
