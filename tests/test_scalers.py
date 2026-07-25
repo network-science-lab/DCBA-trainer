@@ -2,6 +2,7 @@
 
 import math
 
+import pytest
 import torch
 
 from dcba.dataset.scalers import (
@@ -14,6 +15,14 @@ from dcba.dataset.scalers import (
 )
 
 _N_MAX = 10_000
+
+_ALL_SCALERS = (
+    ABCDEmpiricalConfigScaler,
+    ABCDNMaxConfigScaler,
+    ABCDLogConfigScaler,
+    ABCDRelativeConfigScaler,
+    ABCDIdentityConfigScaler,
+)
 
 
 def _raw_batch() -> torch.Tensor:
@@ -319,3 +328,17 @@ class TestABCDIdentityConfigScaler:
         raw = _raw_batch()
         scaler = ABCDIdentityConfigScaler()
         assert torch.equal(scaler(raw), scaler.transform(raw))
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs CUDA")
+class TestScalerDeviceAgnosticism:
+    """Both directions must follow the input tensor's device, not the bounds' own device."""
+
+    @pytest.mark.parametrize("scaler_cls", _ALL_SCALERS)
+    def test_round_trip_on_cuda(self, scaler_cls: type) -> None:
+        """Bound tensors are built on CPU, so both methods must move them to the input's device."""
+        raw = _raw_batch().cuda()
+        scaler = scaler_cls()
+        recovered = scaler.inverse_transform(scaler.transform(raw))
+        assert recovered.is_cuda
+        assert torch.allclose(recovered, raw, atol=1e-3)

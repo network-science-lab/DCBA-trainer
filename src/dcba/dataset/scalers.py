@@ -178,7 +178,9 @@ class ABCDEmpiricalConfigScaler(ABCDBaseConfigScaler):
 
         :returns: Normalised tensor of the same shape.
         """
-        out = (x - self._lo) / (self._hi - self._lo)
+        lo = self._lo.to(x.device)
+        hi = self._hi.to(x.device)
+        out = (x - lo) / (hi - lo)
         out[..., ABCD_CONFIG_IDX["d_min"]] = _scale_ratio(x, "d_min", "d_max")
         out[..., ABCD_CONFIG_IDX["c_min"]] = _scale_ratio(x, "c_min", "c_max")
         return out
@@ -223,7 +225,9 @@ class ABCDNMaxConfigScaler(ABCDBaseConfigScaler):
 
         :returns: Normalised tensor of the same shape.
         """
-        return (x - self._lo) / (self._hi - self._lo)
+        lo = self._lo.to(x.device)
+        hi = self._hi.to(x.device)
+        return (x - lo) / (hi - lo)
 
     def denormalise(self, x: Tensor) -> Tensor:
         """
@@ -271,9 +275,9 @@ class ABCDLogConfigScaler(ABCDBaseConfigScaler):
         log_n = torch.log1p(n_raw)
 
         out[..., ABCD_CONFIG_IDX["n"]] = log_n / self._log_n_max
-        out[..., ABCD_CONFIG_LINEAR_IDX] = (x[..., ABCD_CONFIG_LINEAR_IDX] - self._linear_lo) / (
-            self._linear_hi - self._linear_lo
-        )
+        lo = self._linear_lo.to(x.device)
+        hi = self._linear_hi.to(x.device)
+        out[..., ABCD_CONFIG_LINEAR_IDX] = (x[..., ABCD_CONFIG_LINEAR_IDX] - lo) / (hi - lo)
         out[..., ABCD_CONFIG_LOG_IDX] = torch.log1p(
             x[..., ABCD_CONFIG_LOG_IDX].clamp(min=0.0)
         ) / log_n.unsqueeze(-1)
@@ -346,9 +350,9 @@ class ABCDRelativeConfigScaler(ABCDBaseConfigScaler):
         n_raw = x[..., ABCD_CONFIG_IDX["n"]].clamp(min=1.0)
 
         out[..., ABCD_CONFIG_IDX["n"]] = (n_raw - self._n_lo) / (self._n_hi - self._n_lo)
-        out[..., ABCD_CONFIG_LINEAR_IDX] = (x[..., ABCD_CONFIG_LINEAR_IDX] - self._linear_lo) / (
-            self._linear_hi - self._linear_lo
-        )
+        lo = self._linear_lo.to(x.device)
+        hi = self._linear_hi.to(x.device)
+        out[..., ABCD_CONFIG_LINEAR_IDX] = (x[..., ABCD_CONFIG_LINEAR_IDX] - lo) / (hi - lo)
 
         for key in ("c_max", "d_max", "nout"):
             out[..., ABCD_CONFIG_IDX[key]] = _scale_ratio(x, key, "n")
