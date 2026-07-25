@@ -259,46 +259,22 @@ class TestABCDRelativeConfigScalerSemantics:
         assert scaled.min() >= 0.0
         assert scaled.max() <= 1.0 + 1e-6
 
-    def test_c_max_and_d_max_are_fractions_of_n(self) -> None:
-        """c_max and d_max are scaled as plain ratios to the same row's n."""
+    def test_every_constrained_feature_is_a_fraction_of_its_anchor(self) -> None:
+        """The scaler's single rule: each constrained feature is scaled as x / anchor."""
         scaler = ABCDRelativeConfigScaler()
         raw = _raw_batch()
         scaled = scaler.transform(raw)
-        n = raw[:, ABCD_CONFIG_KEYS.index("n")]
-        for key in ("c_max", "d_max"):
+        anchors = {
+            "c_max": "n",
+            "d_max": "n",
+            "nout": "n",
+            "c_min": "c_max",
+            "d_min": "d_max",
+        }
+        for key, anchor in anchors.items():
             i = ABCD_CONFIG_KEYS.index(key)
-            assert torch.allclose(scaled[:, i], raw[:, i] / n, atol=1e-6)
-
-    def test_d_min_is_log_ratio_to_d_max(self) -> None:
-        """d_min is scaled as log1p(d_min) / log1p(d_max)."""
-        scaler = ABCDRelativeConfigScaler()
-        raw = _raw_batch()
-        scaled = scaler.transform(raw)
-        d_min_idx = ABCD_CONFIG_KEYS.index("d_min")
-        expected = torch.log1p(raw[:, d_min_idx]) / torch.log1p(
-            raw[:, ABCD_CONFIG_KEYS.index("d_max")]
-        )
-        assert torch.allclose(scaled[:, d_min_idx], expected, atol=1e-6)
-
-    def test_nout_matches_log_closed_form(self) -> None:
-        """Nout is scaled as log1p(nout) / log1p(n)."""
-        scaler = ABCDRelativeConfigScaler()
-        raw = _raw_batch()
-        scaled = scaler.transform(raw)
-        n = raw[:, ABCD_CONFIG_KEYS.index("n")]
-        nout = raw[:, ABCD_CONFIG_KEYS.index("nout")]
-        expected = torch.log1p(nout) / torch.log1p(n)
-        assert torch.allclose(scaled[:, ABCD_CONFIG_KEYS.index("nout")], expected, atol=1e-6)
-
-    def test_c_min_still_scaled_as_ratio_to_c_max(self) -> None:
-        """c_min keeps the `c_min / c_max` treatment the constraint loss relies on."""
-        scaler = ABCDRelativeConfigScaler()
-        raw = _raw_batch()
-        scaled = scaler.transform(raw)
-        c_min_idx = ABCD_CONFIG_KEYS.index("c_min")
-        c_max_idx = ABCD_CONFIG_KEYS.index("c_max")
-        expected = raw[:, c_min_idx] / raw[:, c_max_idx]
-        assert torch.allclose(scaled[:, c_min_idx], expected, atol=1e-6)
+            expected = raw[:, i] / raw[:, ABCD_CONFIG_KEYS.index(anchor)]
+            assert torch.allclose(scaled[:, i], expected, atol=1e-6), key
 
 
 class TestABCDRelativeConfigScalerNInvariance:

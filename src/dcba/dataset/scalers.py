@@ -316,12 +316,8 @@ class ABCDRelativeConfigScaler(ABCDBaseConfigScaler):
     """
     Normalise ABCD config tensors to ``[0, 1]`` using hard-constraint anchors, not dataset bounds.
 
-    - ``c_max/n``, ``d_max/n`` (``x <= n``).
-    - ``d_min -> log1p(d_min)/log1p(d_max)`` (``d_min <= d_max``).
-    - ``nout -> log1p(nout)/log1p(n)`` (``nout <= n``).
-    - `n`, `t1`, `t2`, `xi`, `c_min` keep :class:`ABCDEmpiricalConfigScaler`'s treatment.
-
-    The inverse is exact: `n`, then `d_max` before `d_min`, then `c_max` before `c_min`.
+    Every constrained feature is a fraction of its partner: ``c_max/n``, ``d_max/n``, ``nout/n``,
+    ``c_min/c_max``, ``d_min/d_max``; `n`, `t1`, `t2`, `xi` linear.
     """
 
     def __init__(self) -> None:
@@ -354,13 +350,10 @@ class ABCDRelativeConfigScaler(ABCDBaseConfigScaler):
             self._linear_hi - self._linear_lo
         )
 
-        out[..., ABCD_CONFIG_IDX["c_max"]] = x[..., ABCD_CONFIG_IDX["c_max"]] / n_raw
-        out[..., ABCD_CONFIG_IDX["d_max"]] = x[..., ABCD_CONFIG_IDX["d_max"]] / n_raw
-        out[..., ABCD_CONFIG_IDX["nout"]] = torch.log1p(
-            x[..., ABCD_CONFIG_IDX["nout"]].clamp(min=0.0)
-        ) / torch.log1p(n_raw)
+        for key in ("c_max", "d_max", "nout"):
+            out[..., ABCD_CONFIG_IDX[key]] = _scale_ratio(x, key, "n")
 
-        out[..., ABCD_CONFIG_IDX["d_min"]] = _scale_log_ratio(x, "d_min", "d_max")
+        out[..., ABCD_CONFIG_IDX["d_min"]] = _scale_ratio(x, "d_min", "d_max")
         out[..., ABCD_CONFIG_IDX["c_min"]] = _scale_ratio(x, "c_min", "c_max")
         return out
 
@@ -386,14 +379,12 @@ class ABCDRelativeConfigScaler(ABCDBaseConfigScaler):
         for j, i in enumerate(ABCD_CONFIG_LINEAR_IDX):
             cols[i] = lin[..., j]
 
-        c_max_raw = x[..., ABCD_CONFIG_IDX["c_max"]] * n_raw
-        d_max_raw = x[..., ABCD_CONFIG_IDX["d_max"]] * n_raw
+        c_max_raw = _unscale_ratio(x, "c_max", n_raw)
+        d_max_raw = _unscale_ratio(x, "d_max", n_raw)
         cols[ABCD_CONFIG_IDX["c_max"]] = c_max_raw
         cols[ABCD_CONFIG_IDX["d_max"]] = d_max_raw
-        cols[ABCD_CONFIG_IDX["nout"]] = torch.expm1(
-            x[..., ABCD_CONFIG_IDX["nout"]] * torch.log1p(n_raw)
-        )
-        cols[ABCD_CONFIG_IDX["d_min"]] = _unscale_log_ratio(x, "d_min", d_max_raw)
+        cols[ABCD_CONFIG_IDX["nout"]] = _unscale_ratio(x, "nout", n_raw)
+        cols[ABCD_CONFIG_IDX["d_min"]] = _unscale_ratio(x, "d_min", d_max_raw.clamp(min=1.0))
         cols[ABCD_CONFIG_IDX["c_min"]] = _unscale_ratio(x, "c_min", c_max_raw.clamp(min=1.0))
         return torch.stack(cols, dim=-1)
 
