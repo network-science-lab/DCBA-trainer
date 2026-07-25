@@ -7,11 +7,8 @@ random_seed: 42
 data:
   dataset_root: "abcd-big"
   transform: ABCDConfigToTensor
-  # No community features (ablation): constant node features, pure graph structure.
-  node_transform: CommunityToSize
+  node_transform: ConstantNodeFeatures
   scaler:
-    # Only intended difference from gps-ae-supcon-output-weights.yaml -- keep everything else in
-    # sync so the comparison isolates the scaler change. See ABCDRelativeConfigScaler's docstring.
     name: ABCDRelativeConfigScaler
   val_ratio: 0.10
   test_ratio: 0.10
@@ -48,7 +45,7 @@ training:
   wrapper: supcon
   accelerator: gpu
   devices: [0]
-  max_epochs: 200
+  max_epochs: 20
   # SupCon (temperature 0.07) produces occasional hard-batch gradient spikes; clip identically
   # across scaler-comparison runs so the cap is not a confound.
   gradient_clip_val: 1.0
@@ -58,7 +55,7 @@ training:
       name: abcd_constraint
       args:
         lambda_penalty: 1.0
-        # Same weights as gps-ae-supcon-output-weights.yaml, kept fixed so this run isolates the
+        # Same weights as gps-ae-supcon-base-scaler.yaml, kept fixed so this run isolates the
         # scaler change. Re-derive with scripts/derive_output_weights.py once trained.
         weights: [1.028, 1.068, 1.959, 1.320, 1.034, 1.435, 1.473, 1.138, 1.029]
     repr:

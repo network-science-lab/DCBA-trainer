@@ -7,8 +7,7 @@ random_seed: 42
 data:
   dataset_root: "abcd-big"
   transform: ABCDConfigToTensor
-  # No community features (ablation): constant node features, pure graph structure.
-  node_transform: CommunityToSize
+  node_transform: ConstantNodeFeatures
   scaler:
     name: ABCDEmpiricalConfigScaler
   val_ratio: 0.10
@@ -73,8 +72,17 @@ training:
       weight_decay: 0.00001
   logger:
     project: dcba
-    name: gps-ae-supcon-cluster-pool
-    tags: [gps, no-community-features, abcd-constraint, bidirectional, cluster-pool, reweighted]
+    name: gps-ae-supcon-base-scaler
+    tags:
+      [
+        gps,
+        no-community-features,
+        abcd-constraint,
+        bidirectional,
+        cluster-pool,
+        reweighted,
+        base-scaler,
+      ]
   callbacks:
     - name: model_checkpoint
       monitor: val_loss
