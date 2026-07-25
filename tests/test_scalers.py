@@ -6,7 +6,7 @@ import torch
 
 from dcba.dataset.scalers import (
     ABCD_CONFIG_KEYS,
-    ABCDConfigScaler,
+    ABCDEmpiricalConfigScaler,
     ABCDIdentityConfigScaler,
     ABCDLogConfigScaler,
     ABCDNMaxConfigScaler,
@@ -29,6 +29,56 @@ def _raw_batch() -> torch.Tensor:
             [50.0, 3.0, 2.0, 0.5, 2.0, 10.0, 1.0, 5.0, 1.0],
         ]
     )
+
+
+class TestABCDEmpiricalConfigScaler:
+    """Empirical-bound scaler: linear map from ABCD_PARAM_BOUNDS, c_min/d_min anchored instead."""
+
+    def test_round_trip_recovers_raw_values(self) -> None:
+        """Transform then inverse_transform returns the original batch (up to int rounding)."""
+        raw = _raw_batch()
+        scaler = ABCDEmpiricalConfigScaler()
+        recovered = scaler.inverse_transform(scaler.transform(raw))
+        assert torch.allclose(recovered, raw, atol=1e-3)
+
+    def test_round_trip_single_row(self) -> None:
+        """Round-trip also holds for a single (non-batched) config row."""
+        raw = _raw_batch()[0]
+        scaler = ABCDEmpiricalConfigScaler()
+        recovered = scaler.inverse_transform(scaler.transform(raw))
+        assert torch.allclose(recovered, raw, atol=1e-3)
+
+    def test_scaled_values_in_unit_range(self) -> None:
+        """Every scaled feature lies in [0, 1] for constraint-respecting raw inputs."""
+        scaler = ABCDEmpiricalConfigScaler()
+        scaled = scaler.transform(_raw_batch())
+        assert scaled.min() >= 0.0
+        assert scaled.max() <= 1.0 + 1e-6
+
+    def test_c_min_is_ratio_to_c_max(self) -> None:
+        """c_min is scaled as c_min / c_max, guaranteeing c_min <= c_max by construction."""
+        scaler = ABCDEmpiricalConfigScaler()
+        raw = _raw_batch()
+        scaled = scaler.transform(raw)
+        c_min_idx = ABCD_CONFIG_KEYS.index("c_min")
+        expected = raw[:, c_min_idx] / raw[:, ABCD_CONFIG_KEYS.index("c_max")]
+        assert torch.allclose(scaled[:, c_min_idx], expected, atol=1e-6)
+
+    def test_d_min_is_log_exponent_of_d_max(self) -> None:
+        """d_min is anchored on d_max (its true constraint partner), not on a fixed bound."""
+        scaler = ABCDEmpiricalConfigScaler()
+        raw = _raw_batch()
+        scaled = scaler.transform(raw)
+        d_min_idx = ABCD_CONFIG_KEYS.index("d_min")
+        expected = torch.log(raw[:, d_min_idx]) / torch.log(raw[:, ABCD_CONFIG_KEYS.index("d_max")])
+        assert torch.allclose(scaled[:, d_min_idx], expected, atol=1e-6)
+
+    def test_denormalise_is_differentiable(self) -> None:
+        """Denormalise supports gradient flow, as the constraint loss's 'raw' mode requires."""
+        scaler = ABCDEmpiricalConfigScaler()
+        scaled = scaler.transform(_raw_batch()).requires_grad_(True)
+        scaler.denormalise(scaled).sum().backward()
+        assert scaled.grad is not None
 
 
 class TestABCDNMaxConfigScaler:
@@ -68,7 +118,7 @@ class TestABCDNMaxConfigScaler:
         assert torch.allclose(scaled[:, nout_idx], raw[:, nout_idx] / _N_MAX, atol=1e-6)
 
     def test_c_min_is_linear_not_ratio(self) -> None:
-        """Unlike ABCDConfigScaler, c_min uses the plain linear map, not c_min / c_max."""
+        """Unlike ABCDEmpiricalConfigScaler, c_min uses the plain linear map, not c_min / c_max."""
         scaler = ABCDNMaxConfigScaler()
         raw = _raw_batch()
         scaled = scaler.transform(raw)
@@ -162,8 +212,8 @@ class TestABCDLogConfigScalerRangeUtilisation:
     def test_better_spread_than_fixed_bound_scaler_for_typical_values(self) -> None:
         """d_max values that are a small fraction of n_max spread out more under the log scaler.
 
-        `ABCDConfigScaler` maps `d_max` linearly against a fixed bound observed on one dataset;
-        typical graphs (`d_max` a small fraction of that bound) collapse near 0 (see
+        `ABCDEmpiricalConfigScaler` maps `d_max` linearly against a fixed bound observed on one
+        dataset; typical graphs (`d_max` a small fraction of that bound) collapse near 0 (see
         `scripts/check_config_scaling.py`). `ABCDLogConfigScaler` maps `d_max` relative to each
         graph's own n in log space, which should spread the same values out much more.
         """
@@ -176,7 +226,7 @@ class TestABCDLogConfigScalerRangeUtilisation:
         )
         d_max_idx = ABCD_CONFIG_KEYS.index("d_max")
 
-        old_scaled = ABCDConfigScaler().transform(raw)[:, d_max_idx]
+        old_scaled = ABCDEmpiricalConfigScaler().transform(raw)[:, d_max_idx]
         new_scaled = ABCDLogConfigScaler().transform(raw)[:, d_max_idx]
 
         assert new_scaled.std() > old_scaled.std()

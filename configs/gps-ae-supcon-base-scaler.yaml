@@ -10,7 +10,7 @@ data:
   # No community features (ablation): constant node features, pure graph structure.
   node_transform: CommunityToSize
   scaler:
-    name: ABCDConfigScaler
+    name: ABCDEmpiricalConfigScaler
   val_ratio: 0.10
   test_ratio: 0.10
   batch_size: 32

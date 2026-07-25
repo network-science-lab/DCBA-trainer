@@ -13,7 +13,7 @@ from dcba_data_set.graph_io.data_models import (
 from torch.utils.data import Dataset
 from torch_geometric.transforms import BaseTransform
 
-from dcba.dataset.scalers import ABCDConfigScaler, ABCDConfigToTensor
+from dcba.dataset.scalers import ABCDBaseConfigScaler, ABCDConfigToTensor
 from dcba.dataset.transforms import CommunityToSize
 
 
@@ -27,7 +27,7 @@ class ABCDDataset(Dataset):
 
     Config records are processed by ``transform`` (default:
     :class:`~dcba.dataset.scalers.ABCDConfigToTensor`).  An optional
-    :class:`~dcba.dataset.scalers.ABCDConfigScaler` is applied afterwards when the transform
+    :class:`~dcba.dataset.scalers.ABCDBaseConfigScaler` is applied afterwards when the transform
     produces a tensor, normalising each feature to ``[0, 1]``.
 
     :param records: List of :class:`~dcba_data_set.graph_io.data_models.InstanceRecord` objects,
@@ -49,7 +49,7 @@ class ABCDDataset(Dataset):
     def __init__(
         self,
         records: list[InstanceRecord],
-        scaler: ABCDConfigScaler | None = None,
+        scaler: ABCDBaseConfigScaler | None = None,
         transform: BaseTransform | None = None,
         node_transform: BaseTransform | None = None,
         single_replica_per_instance: bool = True,
@@ -73,7 +73,7 @@ class ABCDDataset(Dataset):
     def from_dataset(
         cls,
         dataset_root: Path,
-        scaler: ABCDConfigScaler | None = None,
+        scaler: ABCDBaseConfigScaler | None = None,
         transform: BaseTransform | None = None,
         node_transform: BaseTransform | None = None,
     ) -> "ABCDDataset":

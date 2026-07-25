@@ -9,7 +9,7 @@ from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from lightning.pytorch.loggers import WandbLogger
 from torch import Tensor
 
-from dcba.dataset import ABCDConfigScaler
+from dcba.dataset import ABCDBaseConfigScaler
 from dcba.dataset.scalers import ABCD_CONFIG_KEYS
 from dcba.models.types import ForwardOutput
 from dcba.wrappers.base import DCBABaseWrapper
@@ -38,7 +38,7 @@ class DCBAAutoencoderWrapper(DCBABaseWrapper):
         self,
         encoder: nn.Module,
         optimizer_config: dict,
-        scaler: ABCDConfigScaler | None = None,
+        scaler: ABCDBaseConfigScaler | None = None,
         loss_fn: nn.Module | None = None,
     ) -> None:
         """Initialise the wrapper with the encoder, optimiser settings, and loss."""

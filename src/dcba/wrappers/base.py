@@ -5,7 +5,7 @@ import torch
 from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from torch import Tensor
 
-from dcba.dataset import ABCDConfigScaler
+from dcba.dataset import ABCDBaseConfigScaler
 
 
 class DCBABaseWrapper(pl.LightningModule):
@@ -21,7 +21,7 @@ class DCBABaseWrapper(pl.LightningModule):
         """Initialise shared instance attributes to their defaults."""
         super().__init__()
         self._optimizer_config: dict = {}
-        self._scaler: ABCDConfigScaler | None = None
+        self._scaler: ABCDBaseConfigScaler | None = None
         self._test_rows: list = []
 
     def _unpack_batch(self, batch: DCBAHeteroData) -> Tensor:
@@ -43,7 +43,7 @@ class DCBABaseWrapper(pl.LightningModule):
         """Reset the per-sample accumulator."""
         self._test_rows = []
 
-    def set_scaler(self, scaler: ABCDConfigScaler | None) -> None:
+    def set_scaler(self, scaler: ABCDBaseConfigScaler | None) -> None:
         """Set the scaler used to inverse-transform tensors before test logging."""
         self._scaler = scaler
 

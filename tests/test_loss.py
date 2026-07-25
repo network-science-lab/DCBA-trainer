@@ -487,7 +487,7 @@ class TestABCDConstraintPenaltyLossOrdering:
         """Constraint-respecting raw configs, including the shape that broke the scaled mode."""
         return torch.tensor(
             [
-                # d_min=20 > d_max/60: falsely penalised by scaled mode under ABCDConfigScaler
+                # d_min=20 > d_max/60: the shape the removed scaled mode falsely penalised
                 [5000.0, 2.5, 1.8, 0.3, 20.0, 300.0, 20.0, 500.0, 15.0],
                 [8000.0, 2.2, 1.5, 0.1, 5.0, 900.0, 3.0, 80.0, 200.0],
             ]
@@ -502,10 +502,10 @@ class TestABCDConstraintPenaltyLossOrdering:
         ``d_max`` on incomparable scales -- the reason ordering comparisons always happen in
         raw scale now.
         """
-        from dcba.dataset.scalers import ABCDConfigScaler, ABCDRelativeConfigScaler
+        from dcba.dataset.scalers import ABCDEmpiricalConfigScaler, ABCDRelativeConfigScaler
 
         raw = self._valid_raw()
-        for scaler_cls in (ABCDConfigScaler, ABCDRelativeConfigScaler):
+        for scaler_cls in (ABCDEmpiricalConfigScaler, ABCDRelativeConfigScaler):
             scaler = scaler_cls()
             scaled = scaler.transform(raw)
             loss = self._loss_with(scaler)(scaled, scaled)
@@ -513,9 +513,9 @@ class TestABCDConstraintPenaltyLossOrdering:
 
     def test_c_min_c_max_guaranteed_by_ratio_scaler(self) -> None:
         """Under a ratio-based scaler, any in-range c_min column satisfies c_min <= c_max."""
-        from dcba.dataset.scalers import ABCDConfigScaler
+        from dcba.dataset.scalers import ABCDEmpiricalConfigScaler
 
-        scaler = ABCDConfigScaler()
+        scaler = ABCDEmpiricalConfigScaler()
         scaled = scaler.transform(self._valid_raw())
         x_hat = scaled.clone()
         x_hat[:, 4] = 0.999  # near-maximal c_min/c_max ratio, still within [0, 1]
@@ -535,9 +535,9 @@ class TestABCDConstraintPenaltyLossOrdering:
 
     def test_genuine_violation_is_penalised(self) -> None:
         """A prediction that decodes to raw d_min > d_max must be penalised."""
-        from dcba.dataset.scalers import ABCDConfigScaler
+        from dcba.dataset.scalers import ABCDEmpiricalConfigScaler
 
-        scaler = ABCDConfigScaler()
+        scaler = ABCDEmpiricalConfigScaler()
         violating_raw = self._valid_raw()
         violating_raw[:, 6] = 600.0  # d_min 600 > d_max 500/80: genuine constraint violation
         scaled = scaler.transform(violating_raw)
@@ -546,9 +546,9 @@ class TestABCDConstraintPenaltyLossOrdering:
 
     def test_penalty_magnitude_is_order_one(self) -> None:
         """Violations are normalised by raw n, so the hinge cannot blow up with graph size."""
-        from dcba.dataset.scalers import ABCDConfigScaler
+        from dcba.dataset.scalers import ABCDEmpiricalConfigScaler
 
-        scaler = ABCDConfigScaler()
+        scaler = ABCDEmpiricalConfigScaler()
         violating_raw = self._valid_raw()
         violating_raw[:, 7] = 9_000.0  # d_max far above n=5000/8000
         scaled = scaler.transform(violating_raw)
@@ -571,19 +571,23 @@ class TestABCDConstraintPenaltyLossOrdering:
         """Random init-like predictions must not explode the penalty under any scaler.
 
         Regression test for the observed failure: normalising by the *predicted* raw n let the
-        denominator collapse to 1 under ABCDConfigScaler while c_max/d_max denormalised to
+        denominator collapse to 1 under ABCDEmpiricalConfigScaler while c_max/d_max denormalised to
         thousands, producing train losses of ~1e4-1e5 at the start of real runs.
         """
         from dcba.dataset.scalers import (
-            ABCDConfigScaler,
+            ABCDEmpiricalConfigScaler,
             ABCDLogConfigScaler,
             ABCDRelativeConfigScaler,
         )
 
         torch.manual_seed(0)
         x_hat = torch.randn(64, 9) * 0.3  # init-like: small, partly negative
-        target = ABCDConfigScaler().transform(self._valid_raw()).repeat(32, 1)
-        for scaler_cls in (ABCDConfigScaler, ABCDLogConfigScaler, ABCDRelativeConfigScaler):
+        target = ABCDEmpiricalConfigScaler().transform(self._valid_raw()).repeat(32, 1)
+        for scaler_cls in (
+            ABCDEmpiricalConfigScaler,
+            ABCDLogConfigScaler,
+            ABCDRelativeConfigScaler,
+        ):
             scaler = scaler_cls()
             target = scaler.transform(self._valid_raw()).repeat(32, 1)
             loss = self._loss_with(scaler)(x_hat, target)
@@ -594,11 +598,11 @@ class TestABCDConstraintPenaltyLossOrdering:
 
         Regression test for the relative-violation normalisation, whose gradient pointed the
         wrong way when the violator was its own denominator with a negative co-operand
-        (predicted n < 0 at init under ABCDConfigScaler).
+        (predicted n < 0 at init under ABCDEmpiricalConfigScaler).
         """
-        from dcba.dataset.scalers import ABCDConfigScaler
+        from dcba.dataset.scalers import ABCDEmpiricalConfigScaler
 
-        scaler = ABCDConfigScaler()
+        scaler = ABCDEmpiricalConfigScaler()
         target = scaler.transform(self._valid_raw())
         x_hat = target.clone()
         x_hat[:, 0] = -0.05  # predicted n denormalises negative
