@@ -171,25 +171,15 @@ class TestABCDLogConfigScalerRange:
         expected = torch.log1p(raw[:, n_idx]) / math.log1p(_N_MAX)
         assert torch.allclose(scaled[:, n_idx], expected, atol=1e-6)
 
-    def test_c_min_still_scaled_as_ratio_to_c_max(self) -> None:
-        """c_min keeps the `c_min / c_max` treatment, unaffected by the log change."""
+    def test_min_features_are_log_ratios_to_their_max(self) -> None:
+        """c_min and d_min are both log1p-anchored on their true constraint partners, not on n."""
         scaler = ABCDLogConfigScaler()
         raw = _raw_batch()
         scaled = scaler.transform(raw)
-        c_min_idx = ABCD_CONFIG_KEYS.index("c_min")
-        c_max_idx = ABCD_CONFIG_KEYS.index("c_max")
-        expected = raw[:, c_min_idx] / raw[:, c_max_idx]
-        assert torch.allclose(scaled[:, c_min_idx], expected, atol=1e-6)
-
-    def test_d_min_is_log_exponent_of_d_max(self) -> None:
-        """d_min is anchored on d_max (its true constraint partner), not on n."""
-        scaler = ABCDLogConfigScaler()
-        raw = _raw_batch()
-        scaled = scaler.transform(raw)
-        d_min = raw[:, ABCD_CONFIG_KEYS.index("d_min")]
-        d_max = raw[:, ABCD_CONFIG_KEYS.index("d_max")]
-        expected = torch.log(d_min) / torch.log(d_max)
-        assert torch.allclose(scaled[:, ABCD_CONFIG_KEYS.index("d_min")], expected, atol=1e-6)
+        for key, anchor in (("c_min", "c_max"), ("d_min", "d_max")):
+            i = ABCD_CONFIG_KEYS.index(key)
+            expected = torch.log1p(raw[:, i]) / torch.log1p(raw[:, ABCD_CONFIG_KEYS.index(anchor)])
+            assert torch.allclose(scaled[:, i], expected, atol=1e-6), key
 
 
 class TestABCDLogConfigScalerRelativeToOwnN:
@@ -279,15 +269,16 @@ class TestABCDRelativeConfigScalerSemantics:
             i = ABCD_CONFIG_KEYS.index(key)
             assert torch.allclose(scaled[:, i], raw[:, i] / n, atol=1e-6)
 
-    def test_d_min_is_log_exponent_of_d_max(self) -> None:
-        """d_min is scaled as the exponent s with d_min = d_max ** s."""
+    def test_d_min_is_log_ratio_to_d_max(self) -> None:
+        """d_min is scaled as log1p(d_min) / log1p(d_max)."""
         scaler = ABCDRelativeConfigScaler()
         raw = _raw_batch()
         scaled = scaler.transform(raw)
-        d_min = raw[:, ABCD_CONFIG_KEYS.index("d_min")]
-        d_max = raw[:, ABCD_CONFIG_KEYS.index("d_max")]
-        expected = torch.log(d_min) / torch.log(d_max)
-        assert torch.allclose(scaled[:, ABCD_CONFIG_KEYS.index("d_min")], expected, atol=1e-6)
+        d_min_idx = ABCD_CONFIG_KEYS.index("d_min")
+        expected = torch.log1p(raw[:, d_min_idx]) / torch.log1p(
+            raw[:, ABCD_CONFIG_KEYS.index("d_max")]
+        )
+        assert torch.allclose(scaled[:, d_min_idx], expected, atol=1e-6)
 
     def test_nout_matches_log_closed_form(self) -> None:
         """Nout is scaled as log1p(nout) / log1p(n)."""

@@ -87,8 +87,7 @@ def _unscale_ratio(x: Tensor, key: str, anchor_raw: Tensor) -> Tensor:
 
     :param x: Normalised float tensor of shape ``(..., 9)`` (only its ``key`` column is read).
     :param key: Feature to recover, e.g. ``"c_min"``.
-    :param anchor_raw: Already-recovered raw anchor. Clamp before calling if needed; not applied
-        here.
+    :param anchor_raw: Recovered raw anchor. Clamp before calling if needed; not applied here.
 
     :returns: Raw ``key`` column, shape ``(...,)``.
     """
@@ -97,9 +96,7 @@ def _unscale_ratio(x: Tensor, key: str, anchor_raw: Tensor) -> Tensor:
 
 def _scale_log_ratio(x: Tensor, key: str, anchor_key: str) -> Tensor:
     """
-    Compute ``key`` as the exponent ``s`` in ``key = anchor ** s``.
-
-    Anchor clamped >= 2 so its log is positive; only reachable on degenerate raw configs.
+    Compute ``key`` as ``log1p(key) / log1p(anchor)`` (anchor clamped >= 1, keeping it positive).
 
     :param x: Float tensor of shape ``(..., 9)``, raw (unscaled) feature values.
     :param key: Feature to scale, e.g. ``"d_min"``.
@@ -107,33 +104,25 @@ def _scale_log_ratio(x: Tensor, key: str, anchor_key: str) -> Tensor:
 
     :returns: Normalised ``key`` column, shape ``(...,)``.
     """
-    return torch.log(x[..., ABCD_CONFIG_IDX[key]].clamp(min=1.0)) / torch.log(
-        x[..., ABCD_CONFIG_IDX[anchor_key]].clamp(min=2.0)
-    )
+    anchor_raw = x[..., ABCD_CONFIG_IDX[anchor_key]].clamp(min=1.0)
+    return torch.log1p(x[..., ABCD_CONFIG_IDX[key]].clamp(min=0.0)) / torch.log1p(anchor_raw)
 
 
 def _unscale_log_ratio(x: Tensor, key: str, anchor_raw: Tensor) -> Tensor:
     """
-    Recover raw ``key`` from its ``log(key) / log(anchor)`` exponent.
+    Recover raw ``key`` from its ``log1p(key) / log1p(anchor)`` exponent.
 
     :param x: Normalised float tensor of shape ``(..., 9)`` (only its ``key`` column is read).
     :param key: Feature to recover, e.g. ``"d_min"``.
-    :param anchor_raw: Already-recovered raw anchor, clamped >= 2 here.
+    :param anchor_raw: Already-recovered raw anchor, clamped >= 1 here.
 
     :returns: Raw ``key`` column, shape ``(...,)``.
     """
-    return anchor_raw.clamp(min=2.0) ** x[..., ABCD_CONFIG_IDX[key]]
+    return torch.expm1(x[..., ABCD_CONFIG_IDX[key]] * torch.log1p(anchor_raw.clamp(min=1.0)))
 
 
 class ABCDBaseConfigScaler:
-    """
-    Shared scaffolding for the ``[0, 1]`` ABCD config scalers below.
-
-    Provides the integer-rounding :meth:`inverse_transform` and :meth:`__call__`, used by every
-    scaler. Subclasses implement :meth:`transform`/:meth:`denormalise`; the ``c_min``/``d_min``
-    anchoring helpers used by some of them are module-level functions (:func:`_scale_ratio` etc.),
-    not part of this base class, since not every scaler needs them.
-    """
+    """Shared scaffolding for the ``[0, 1]`` ABCD config scalers below."""
 
     def transform(self, x: Tensor) -> Tensor:
         """Normalise ``x`` to ``[0, 1]`` per feature. Implemented by each subclass."""
@@ -168,8 +157,7 @@ class ABCDEmpiricalConfigScaler(ABCDBaseConfigScaler):
     Normalise and denormalise ABCD config tensors feature-wise to ``[0, 1]``.
 
     Linear (min-max) map per feature from :data:`ABCD_PARAM_BOUNDS`, except ``c_min`` and
-    ``d_min``, scaled as fractions of their true constraint partners: ``c_min / c_max`` and
-    ``d_min / d_max``. The inverse is exact.
+    ``d_min``, scaled as fractions of their true constraint partners. The inverse is exact.
     """
 
     def __init__(self) -> None:
@@ -199,8 +187,6 @@ class ABCDEmpiricalConfigScaler(ABCDBaseConfigScaler):
         """
         Recover the original scale from a normalised tensor, without integer rounding.
 
-        Fully differentiable. Use :meth:`inverse_transform` for integer-rounded output.
-
         :param x: Normalised float tensor of shape ``(..., 9)``.
 
         :returns: Tensor in the original feature scale, integer features left unrounded.
@@ -217,12 +203,7 @@ class ABCDEmpiricalConfigScaler(ABCDBaseConfigScaler):
 
 
 class ABCDNMaxConfigScaler(ABCDBaseConfigScaler):
-    """
-    Legacy linear scaler: every feature divides by a shared ``10_000``.
-
-    Uses :data:`ABCD_NMAX_BOUNDS`. ``c_min`` and ``d_min`` are not anchored to their constraint
-    partners here, so the :func:`_scale_ratio` helpers are unused. The inverse is exact.
-    """
+    """Legacy linear scaler: every feature divides by a shared ``10_000``."""
 
     def __init__(self) -> None:
         """Initialise the scaler, building lo/hi tensors from :data:`ABCD_NMAX_BOUNDS`."""
@@ -248,8 +229,6 @@ class ABCDNMaxConfigScaler(ABCDBaseConfigScaler):
         """
         Recover the original scale from a normalised tensor, without integer rounding.
 
-        Fully differentiable (plain linear inverse map).
-
         :param x: Normalised float tensor of shape ``(..., 9)``.
 
         :returns: Tensor in the original feature scale, integer features left unrounded.
@@ -263,16 +242,14 @@ class ABCDLogConfigScaler(ABCDBaseConfigScaler):
     """
     Log-compresses size-like features against `n`.
 
-    ``c_max``, ``d_max``, ``nout`` as ``log1p(x) / log1p(n)``; `n` as
-    ``log1p(n) / log1p(10_000)``; `d_min` as ``log(d_min) / log(d_max)`` (its true constraint
-    partner). `t1`, `t2`, `xi`, `c_min` keep :class:`ABCDEmpiricalConfigScaler`'s treatment.
-    The inverse is exact.
+    `n` as ``log1p(n)/log1p(n_max)``; `c_max`, `d_max`, `nout` as ``log1p(x)/log1p(n)``;
+    `c_min`, `d_min` as ``log1p(x_min)/log1p(x_max)``; `t1`, `t2`, `xi` linear.
     """
 
     def __init__(self) -> None:
         """Initialise the scaler, caching the linear bounds it still uses."""
         super().__init__()
-        self._log_n_max = math.log1p(10_000.0)
+        self._log_n_max = math.log1p(ABCD_PARAM_BOUNDS["n"][1])
         linear_keys = ("t1", "t2", "xi")
         self._linear_lo = torch.tensor(
             [ABCD_PARAM_BOUNDS[k][0] for k in linear_keys], dtype=torch.float32
@@ -302,14 +279,12 @@ class ABCDLogConfigScaler(ABCDBaseConfigScaler):
         ) / log_n.unsqueeze(-1)
 
         out[..., ABCD_CONFIG_IDX["d_min"]] = _scale_log_ratio(x, "d_min", "d_max")
-        out[..., ABCD_CONFIG_IDX["c_min"]] = _scale_ratio(x, "c_min", "c_max")
+        out[..., ABCD_CONFIG_IDX["c_min"]] = _scale_log_ratio(x, "c_min", "c_max")
         return out
 
     def denormalise(self, x: Tensor) -> Tensor:
         """
         Recover the original scale from a normalised tensor, without integer rounding.
-
-        Fully differentiable. Use :meth:`inverse_transform` for integer-rounded output.
 
         :param x: Normalised float tensor of shape ``(..., 9)``.
 
@@ -331,8 +306,8 @@ class ABCDLogConfigScaler(ABCDBaseConfigScaler):
         cols[ABCD_CONFIG_IDX["d_min"]] = _unscale_log_ratio(
             x, "d_min", cols[ABCD_CONFIG_IDX["d_max"]]
         )
-        cols[ABCD_CONFIG_IDX["c_min"]] = _unscale_ratio(
-            x, "c_min", cols[ABCD_CONFIG_IDX["c_max"]].clamp(min=1.0)
+        cols[ABCD_CONFIG_IDX["c_min"]] = _unscale_log_ratio(
+            x, "c_min", cols[ABCD_CONFIG_IDX["c_max"]]
         )
         return torch.stack(cols, dim=-1)
 
@@ -342,8 +317,7 @@ class ABCDRelativeConfigScaler(ABCDBaseConfigScaler):
     Normalise ABCD config tensors to ``[0, 1]`` using hard-constraint anchors, not dataset bounds.
 
     - ``c_max/n``, ``d_max/n`` (``x <= n``).
-    - ``d_min -> log(d_min)/log(d_max)`` (``d_min <= d_max``), i.e. the exponent ``s`` in
-      ``d_min = d_max ** s``.
+    - ``d_min -> log1p(d_min)/log1p(d_max)`` (``d_min <= d_max``).
     - ``nout -> log1p(nout)/log1p(n)`` (``nout <= n``).
     - `n`, `t1`, `t2`, `xi`, `c_min` keep :class:`ABCDEmpiricalConfigScaler`'s treatment.
 
@@ -425,12 +399,7 @@ class ABCDRelativeConfigScaler(ABCDBaseConfigScaler):
 
 
 class ABCDIdentityConfigScaler(ABCDBaseConfigScaler):
-    """
-    No-op scaler: every feature stays in raw scale.
-
-    Gives the "no scaling" comparison arm a real scaler object (rather than ``None``) to attach
-    to :class:`~dcba.training.loss.ABCDConstraintPenaltyLoss`, which always requires one.
-    """
+    """No-op scaler: every feature stays in raw scale."""
 
     def transform(self, x: Tensor) -> Tensor:
         """
@@ -457,8 +426,7 @@ class ABCDConfigToTensor(BaseTransform):
     """
     Transform a :class:`~dcba_data_set.graph_io.data_models.DCBAInstanceConfig` to a float tensor.
 
-    Extracts the 9 numerical ABCD config fields in the order defined by
-    :data:`ABCD_CONFIG_KEYS` and returns a 1-D ``float32`` tensor of shape ``(9,)``.
+    Extracts the 9 numerical ABCD config fieldsll returns a ``float32`` tensor of shape ``(9,)``.
     """
 
     def forward(self, data: DCBAInstanceConfig) -> Tensor:
