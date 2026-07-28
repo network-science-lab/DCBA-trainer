@@ -18,7 +18,8 @@ class GINEncoder(nn.Module):
     for contrastive learning when paired with
     :class:`~dcba.models.config_ae.ConfigAutoEncoder`.
 
-    :param hidden_dims: Sizes of intermediate GIN layers.
+    :param hidden_dims: Sizes of intermediate GIN layers. Only shapes the encoder -- the decoder
+        is a fixed single hidden layer sized off ``hidden_dims[-1]`` (see :meth:`decode`).
     :param embedding_dim: Dimensionality of the graph embedding ``z_g``.
     :param output_dim: Dimensionality of the predicted config vector (e.g. 9 for ABCD).
     :param dropout: Dropout probability applied after each GIN layer.
@@ -54,13 +55,11 @@ class GINEncoder(nn.Module):
         self._aggregator = LayerwiseAggregation(embedding_dim)
         self._pool = AttentionalAggregation(gate_nn=nn.Linear(embedding_dim, 1))
 
-        dec_dims = [embedding_dim] + list(reversed(hidden_dims)) + [output_dim]
-        dec_layers: list[nn.Module] = []
-        for i in range(len(dec_dims) - 1):
-            dec_layers.append(nn.Linear(dec_dims[i], dec_dims[i + 1]))
-            if i < len(dec_dims) - 2:
-                dec_layers.append(nn.ReLU())
-        self._decoder = nn.Sequential(*dec_layers)
+        self._decoder = nn.Sequential(
+            nn.Linear(embedding_dim, hidden_dims[-1]),
+            nn.ReLU(),
+            nn.Linear(hidden_dims[-1], output_dim),
+        )
 
     def encode(self, data: DCBAHeteroData) -> Tensor:
         """
