@@ -1,0 +1,89 @@
+hydra:
+  run:
+    dir: .trainings/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+random_seed: 42
+
+data:
+  dataset_root: "abcd-big"
+  transform: ABCDConfigToTensor
+  node_transform: ConstantNodeFeatures
+  scaler:
+    name: ABCDLogConfigScaler
+  val_ratio: 0.10
+  test_ratio: 0.10
+  batch_size: 32
+  num_workers: 0
+
+models:
+  graph:
+    cls: GPSEncoder
+    attn_type: performer
+    hidden_dim: 64
+    num_layers: 2
+    num_heads: 4
+    embedding_dim: 64
+    output_dim: 9
+    dropout: 0.1
+    attn_dropout: 0.1
+    # No soft-clustering pool: only the flat attentional pool feeds the projection, and the
+    # encoder exposes no aux_loss (so training.aux_weight is irrelevant here).
+    num_clusters: 0
+  theta:
+    cls: ConfigAutoEncoder
+    input_dim: 9
+    hidden_dims: [128, 64, 32]
+    embedding_dim: ${models.graph.embedding_dim}
+
+training:
+  wrapper: supcon
+  accelerator: gpu
+  devices: [0]
+  max_epochs: 20
+  # SupCon (temperature 0.07) produces occasional hard-batch gradient spikes; clip identically
+  # across scaler-comparison runs so the cap is not a confound.
+  gradient_clip_val: 1.0
+  losses:
+    reg:
+      name: abcd_constraint
+      args:
+        lambda_penalty: 1.0
+        # No per-feature weights: every output channel is weighted equally.
+    repr:
+      name: supcon
+      weight: 0.3
+      args:
+        temperature: 0.07
+        tau_dist: 1.0
+        bidirectional: true
+  optimizer:
+    name: AdamW
+    args:
+      lr: 0.001
+      weight_decay: 0.00001
+  logger:
+    project: dcba
+    name: gps-ae-supcon-bare
+    tags:
+      [
+        gps,
+        no-community-features,
+        abcd-constraint,
+        bidirectional,
+        no-cluster-pool,
+        unweighted,
+        log-scaler,
+      ]
+  callbacks:
+    - name: model_checkpoint
+      monitor: val_loss
+      mode: min
+      save_top_k: 1
+      save_last: true
+      verbose: true
+    - name: early_stopping
+      monitor: val_loss
+      mode: min
+      patience: 3
+    - name: model_summary
+      max_depth: -1
