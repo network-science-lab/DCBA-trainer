@@ -1,0 +1,97 @@
+hydra:
+  run:
+    dir: .trainings/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+random_seed: 42
+
+data:
+  dataset_root: "abcd-big"
+  transform: ABCDConfigToTensor
+  node_transform: ConstantNodeFeatures
+  scaler:
+    name: ABCDLogConfigScaler
+  val_ratio: 0.10
+  test_ratio: 0.10
+  batch_size: 32
+  num_workers: 0
+
+models:
+  graph:
+    cls: GPSEncoder
+    attn_type: performer
+    hidden_dim: 64
+    num_layers: 2
+    num_heads: 4
+    embedding_dim: 64
+    output_dim: 9
+    dropout: 0.1
+    attn_dropout: 0.1
+    # Learned soft-clustering pool (see GPSEncoder docstring). num_clusters is a budget the model
+    # can under-use, not a per-graph community count -- set well above the largest expected count.
+    num_clusters: 128
+    # Quantile levels read off the per-slot soft cluster sizes (see GPSEncoder._cluster_pool).
+    cluster_size_quantiles:
+      [0.01, 0.05, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 0.95, 0.99]
+    # Disable the usage-entropy aux term: its minimum is all mass on a single slot, which
+    # collapses the cluster-size distribution the quantiles above read. Per-node entropy stays.
+    usage_entropy_weight: 0.0
+  theta:
+    cls: ConfigAutoEncoder
+    input_dim: 9
+    hidden_dims: [128, 64, 32]
+    embedding_dim: ${models.graph.embedding_dim}
+
+training:
+  wrapper: supcon
+  accelerator: gpu
+  devices: [0]
+  max_epochs: 20
+  # SupCon (temperature 0.07) produces occasional hard-batch gradient spikes; clip identically
+  # across scaler-comparison runs so the cap is not a confound.
+  gradient_clip_val: 1.0
+  aux_weight: 0.1 # weight on the cluster-assignment entropy loss
+  losses:
+    reg:
+      name: abcd_constraint
+      args:
+        lambda_penalty: 1.0
+        # No per-feature weights: every ABCD config feature contributes equally to the
+        # reconstruction MSE, unlike gps-ae-supcon-log-scaler.yaml's reweighted variant.
+    repr:
+      name: supcon
+      weight: 0.3
+      args:
+        temperature: 0.07
+        tau_dist: 1.0
+        bidirectional: true
+  optimizer:
+    name: AdamW
+    args:
+      lr: 0.001
+      weight_decay: 0.00001
+  logger:
+    project: dcba
+    name: gps-ae-supcon-log-scaler-no-weights
+    tags:
+      [
+        gps,
+        no-community-features,
+        abcd-constraint,
+        bidirectional,
+        cluster-pool,
+        unweighted,
+        log-scaler,
+      ]
+  callbacks:
+    - name: model_checkpoint
+      monitor: val_loss
+      mode: min
+      save_top_k: 1
+      save_last: true
+      verbose: true
+    - name: early_stopping
+      monitor: val_loss
+      mode: min
+      patience: 3
+    - name: model_summary
+      max_depth: -1

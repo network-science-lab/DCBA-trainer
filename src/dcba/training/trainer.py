@@ -22,6 +22,7 @@ from dcba.dataset import (
 from dcba.models.config_ae import ConfigAutoEncoder
 from dcba.models.gin_encoder import GINEncoder
 from dcba.models.gps_encoder import GPSEncoder
+from dcba.models.gps_encoder_simplify import GPSEncoderSimplify
 from dcba.training.callbacks import get_callbacks
 from dcba.training.loggers import get_logger
 from dcba.training.loss import (
@@ -39,6 +40,7 @@ _MODELS = {
     "ConfigAutoEncoder": ConfigAutoEncoder,
     "GINEncoder": GINEncoder,
     "GPSEncoder": GPSEncoder,
+    "GPSEncoderSimplify": GPSEncoderSimplify,
 }
 
 _LOSSES: dict[str, type[nn.Module]] = {
