@@ -94,8 +94,9 @@ PROJ_AXIS_LIM = 4.5
 
 #: (run_id, human-readable label) for the current gps-ae-supcon comparison set.
 RUNS: list[tuple[str, str]] = [
-    ("3or3wpqk", "gps-ae-supcon, no-community-features, batch64"),
-    ("oraxoj6n", "gps-ae-supcon, no-community-features, batch64"),
+    ("vmp4lilb", "gps-ae-supcon, community-features, batch32"),
+    ("sr3gfwb4", "gps-ae-supcon, no-community-features, batch32"),
+    # ("oraxoj6n", "gps-ae-supcon, no-community-features, batch64"),
 ]
 
 #: Per-run patches for ``models.graph`` fields that existed in :class:`~dcba.models.gps_encoder.GPSEncoder`
@@ -109,7 +110,7 @@ RUNS: list[tuple[str, str]] = [
 #: for ``2 * hidden_dim + 2 = 130``. Confirmed by loading the checkpoint with
 #: ``strict=False`` after patching to a 2-element tuple: zero missing/unexpected keys.
 CONFIG_OVERRIDES: dict[str, dict[str, object]] = {
-    "3or3wpqk": {"cluster_size_quantiles": (0.0, 1.0)},
+    # "3or3wpqk": {"cluster_size_quantiles": (0.0, 1.0)},
 }
 
 
@@ -496,20 +497,36 @@ def _plot_distance_scatter(
         same_d_embed = d_embed[same_group]
         same_mean = same_d_embed.mean().item()
         same_lo, same_hi = torch.quantile(same_d_embed, band_t)
-        ax.errorbar(
-            [same_d_theta],
-            [same_mean],
-            yerr=[[same_mean - same_lo.item()], [same_hi.item() - same_mean]],
-            fmt="o",
-            markerfacecolor="none",
-            markeredgecolor="dimgray",
-            ecolor="dimgray",
+        ax.vlines(
+            same_d_theta,
+            same_lo.item(),
+            same_hi.item(),
+            color="dimgray",
             alpha=0.7,
-            markersize=6,
-            markeredgewidth=1.3,
-            capsize=3,
             linewidth=1.1,
             zorder=4,
+        )
+        ax.scatter(
+            [same_d_theta, same_d_theta],
+            [same_lo.item(), same_hi.item()],
+            marker="_",
+            s=40,
+            color="dimgray",
+            alpha=0.7,
+            linewidths=1.1,
+            zorder=4,
+        )
+        ax.plot(
+            [same_d_theta],
+            [same_mean],
+            marker="o",
+            linestyle="none",
+            markerfacecolor="none",
+            markeredgecolor="dimgray",
+            markeredgewidth=1.3,
+            markersize=6,
+            alpha=0.7,
+            zorder=5,
             label=f"same instance (n={same_group.sum().item()})",
         )
 

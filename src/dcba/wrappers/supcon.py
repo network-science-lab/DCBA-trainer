@@ -143,6 +143,14 @@ class DCBASupConWrapper(DCBABaseWrapper):
                 self.log(
                     f"{stage}_loss-cluster-usage-entropy", usage_entropy, batch_size=batch_size
                 )
+            # Diagnostics rather than loss components (see GPSEncoderShape). The cut is the
+            # fraction of edge volume kept inside a slot, and `1 - cut` tracks xi. Modularity says
+            # whether the learned slots are communities at all: ground-truth ABCD partitions score
+            # ~0.41, so a value near 0 means the size and density channels describe nothing.
+            for name, attribute in (("cut", "normalised_cut"), ("modularity", "modularity")):
+                value = getattr(self._graph_encoder, attribute, None)
+                if value is not None:
+                    self.log(f"{stage}_loss-cluster-{name}", value, batch_size=batch_size)
 
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch_size)
         self.log(f"{stage}_loss-reg-t", l_reg_zt, batch_size=batch_size)

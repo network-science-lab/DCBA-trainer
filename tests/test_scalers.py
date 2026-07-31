@@ -29,11 +29,13 @@ def _raw_batch() -> torch.Tensor:
     """Build a small, constraint-respecting batch of raw ABCD configs, varied in scale.
 
     Columns follow :data:`ABCD_CONFIG_KEYS`: ``[n, t1, t2, xi, c_min, c_max, d_min, d_max, nout]``.
-    Each row keeps ``c_min <= c_max <= n``, ``d_min <= d_max <= n`` and ``nout <= n``.
+    Each row keeps ``c_min <= c_max <= n``, ``d_min <= d_max <= n`` and ``nout <= n``, and keeps
+    ``t1``/``t2`` inside :data:`ABCD_PARAM_BOUNDS` (``t1 <= 3``, ``t2 <= 2``), including one row
+    sitting exactly on both ceilings.
     """
     return torch.tensor(
         [
-            [5000.0, 2.5, 3.1, 0.3, 20.0, 300.0, 2.0, 50.0, 15.0],
+            [5000.0, 2.5, 1.9, 0.3, 20.0, 300.0, 2.0, 50.0, 15.0],
             [10000.0, 1.5, 1.8, 0.1, 5.0, 4000.0, 1.0, 30.0, 200.0],
             [50.0, 3.0, 2.0, 0.5, 2.0, 10.0, 1.0, 5.0, 1.0],
         ]

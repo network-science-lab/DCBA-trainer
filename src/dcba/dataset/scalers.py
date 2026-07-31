@@ -43,7 +43,7 @@ class ABCDConfigSchema(BaseModel):
 ABCD_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
     "n": (1.0, 10_000.0),  # @assert n > 0; upper bound is a chosen ceiling
     "t1": (1.0, 5.0),  # @assert alpha >= 1; upper bound is a chosen ceiling
-    "t2": (1.0, 5.0),  # @assert alpha >= 1; upper bound is a chosen ceiling
+    "t2": (1.0, 2.5),  # @assert alpha >= 1; upper bound is a chosen ceiling
     "xi": (0.0, 1.0),  # 0 <= xi <= 1 (hard constraint)
     "c_min": (0.0, 1.0),  # fraction of c_max -- see ABCDEmpiricalConfigScaler
     "c_max": (1.0, 6_000.0),  # observed max ~4938 on abcd-big
@@ -57,7 +57,7 @@ ABCD_PARAM_BOUNDS: dict[str, tuple[float, float]] = {
 ABCD_NMAX_BOUNDS: dict[str, tuple[float, float]] = {
     "n": (1.0, 10_000.0),  # @assert n > 0
     "t1": (1.0, 5.0),  # @assert alpha >= 1
-    "t2": (1.0, 5.0),  # @assert alpha >= 1
+    "t2": (1.0, 2.5),  # @assert alpha >= 1
     "xi": (0.0, 1.0),  # 0 <= xi <= 1 (hard constraint)
     "c_min": (1.0, 10_000.0),  # >= 1; c_min <= c_max <= n
     "c_max": (1.0, 10_000.0),  # c_max <= n (ABCDConfig validator)
