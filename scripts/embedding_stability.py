@@ -33,7 +33,6 @@ Usage:
 To analyse different runs, edit :data:`RUNS` at the top of this file.
 """
 
-import copy
 import logging
 import random
 from dataclasses import dataclass
@@ -52,16 +51,16 @@ from torch.utils.data import Subset
 from torch_geometric.loader import DataLoader as PyGDataLoader
 from tqdm import tqdm
 
-from dcba.datamodule import ABCDDataModule
 from dcba.dataset import ABCDBaseConfigScaler
 from dcba.dataset.scalers import ABCD_CONFIG_KEYS
-from dcba.training.loss import config_pairwise_distance
-from dcba.training.trainer import (
-    _build_node_transform,
-    _build_scaler,
-    _build_transform,
-    build_supcon_wrapper,
+from dcba.eval.checkpoints import (
+    apply_config_overrides,
+    download_best_checkpoint,
+    load_supcon_wrapper,
 )
+from dcba.eval.test_data import build_test_dataloader
+from dcba.training.loss import config_pairwise_distance
+from dcba.training.trainer import _build_node_transform, _build_transform
 from dcba.utils.paths import DATA_ROOT
 from dcba.wrappers.supcon import DCBASupConWrapper
 
@@ -99,38 +98,6 @@ RUNS: list[tuple[str, str]] = [
     # ("oraxoj6n", "gps-ae-supcon, no-community-features, batch64"),
 ]
 
-#: Per-run patches for ``models.graph`` fields that existed in :class:`~dcba.models.gps_encoder.GPSEncoder`
-#: at training time but were not yet logged to that run's W&B config -- without this,
-#: :func:`~dcba.training.trainer.build_supcon_wrapper` falls back to *today's* class default for
-#: the missing field, which can silently mismatch an older checkpoint's shape.
-#:
-#: ``3or3wpqk`` logged ``num_clusters=16`` (so its checkpoint has the cluster-pooling branch) but
-#: no ``cluster_size_quantiles`` -- today's default is a 5-element tuple, giving
-#: ``proj_in_dim = 2 * hidden_dim + 5 = 133``, but the checkpoint's ``_proj.0.weight`` is shaped
-#: for ``2 * hidden_dim + 2 = 130``. Confirmed by loading the checkpoint with
-#: ``strict=False`` after patching to a 2-element tuple: zero missing/unexpected keys.
-CONFIG_OVERRIDES: dict[str, dict[str, object]] = {
-    # "3or3wpqk": {"cluster_size_quantiles": (0.0, 1.0)},
-}
-
-
-def _apply_config_override(cfg: dict, run_id: str) -> dict:
-    """
-    Patch ``cfg["models"]["graph"]`` with any :data:`CONFIG_OVERRIDES` entry for ``run_id``.
-
-    :param cfg: Run config as logged to W&B.
-    :param run_id: W&B run ID, used to look up :data:`CONFIG_OVERRIDES`.
-
-    :returns: ``cfg`` unchanged if no override is registered for ``run_id``; otherwise a deep
-        copy with the override applied.
-    """
-    overrides = CONFIG_OVERRIDES.get(run_id)
-    if not overrides:
-        return cfg
-    patched = copy.deepcopy(cfg)
-    patched["models"]["graph"].update(overrides)
-    return patched
-
 
 @dataclass
 class RunEmbeddings:
@@ -156,60 +123,6 @@ class RunEmbeddings:
     z_theta: Tensor
     instance_id: list[str]
     replica: Tensor
-
-
-def _download_checkpoint(run: wandb.apis.public.Run, cache_dir: Path) -> Path:
-    """
-    Download the run's best model checkpoint artifact (``model-epoch-*``, not ``last.ckpt``).
-
-    :param run: W&B run to fetch the artifact from.
-    :param cache_dir: Directory under which the artifact is downloaded (one subdirectory per run).
-
-    :returns: Local path to the downloaded ``.ckpt`` file.
-    """
-    candidates = [
-        a for a in run.logged_artifacts() if a.type == "model" and a.name.startswith("model-epoch")
-    ]
-    if not candidates:
-        raise ValueError(
-            f"No best-epoch ('model-epoch-*') model artifact found for run {run.id}. "
-            "This usually means the run never reached a validation checkpoint (e.g. a "
-            "smoke test with too few epochs) and should not be used for this analysis."
-        )
-    artifact_dir = Path(candidates[0].download(root=str(cache_dir / run.id)))
-    ckpt_files = list(artifact_dir.glob("*.ckpt"))
-    if not ckpt_files:
-        raise ValueError(f"No .ckpt file found in downloaded artifact for run {run.id}.")
-    return ckpt_files[0]
-
-
-def _load_wrapper(
-    cfg: dict, ckpt_path: Path, device: torch.device
-) -> tuple[DCBASupConWrapper, ABCDBaseConfigScaler | None]:
-    """
-    Rebuild the supcon wrapper's architecture from a run config, then load checkpoint weights.
-
-    :param cfg: Run config as logged to W&B (mirrors the training hydra config).
-    :param ckpt_path: Local path to the run's ``.ckpt`` file.
-    :param device: Device to load the wrapper onto.
-
-    :returns: The loaded wrapper (in eval mode) and the scaler used to train it.
-    """
-    training_cfg = cfg["training"]
-    if training_cfg["wrapper"] != "supcon":
-        raise ValueError(
-            f"Unsupported wrapper '{training_cfg['wrapper']}' for run; only 'supcon' "
-            "(gps-ae-supcon) is handled by this script."
-        )
-
-    scaler = _build_scaler(cfg["data"].get("scaler"))
-    wrapper = build_supcon_wrapper(cfg)
-    state_dict = torch.load(str(ckpt_path), map_location=device)["state_dict"]
-    wrapper.load_state_dict(state_dict)
-    wrapper.set_scaler(scaler)
-    wrapper.eval()
-    wrapper.to(device)
-    return wrapper, scaler
 
 
 @torch.no_grad()
@@ -243,20 +156,15 @@ def _collect_embeddings(
     # ABCDDataset.__init__ shuffles its items with the unseeded global `random` module, so
     # reseed it here to make the "fixed-seed sample" below actually reproducible.
     random.seed(SEED)
-    datamodule = ABCDDataModule(
+    dataset = build_test_dataloader(
         dataset_root=dataset_root,
-        val_ratio=data_cfg["val_ratio"],
-        test_ratio=data_cfg["test_ratio"],
-        batch_size=data_cfg["batch_size"],
-        num_workers=data_cfg["num_workers"],
-        single_replica_per_instance=False,
-        seed=cfg.get("random_seed", SEED),
+        data_cfg=data_cfg,
         scaler=scaler,
         transform=_build_transform(data_cfg.get("transform")),
         node_transform=_build_node_transform(data_cfg.get("node_transform")),
-    )
-    datamodule.setup()
-    dataset = datamodule.test_dataloader().dataset
+        whole_dataset_as_test=False,
+        seed=cfg.get("random_seed", SEED),
+    ).dataset
 
     n = len(dataset)
     k = n if num_instances < 0 else min(num_instances, n)
@@ -803,9 +711,9 @@ def main() -> None:
     for run_id, run_name in RUNS:
         logger.info(f"Processing run {run_id} ({run_name})...")
         run = api.run(f"{WANDB_ENTITY}/{WANDB_PROJECT}/{run_id}")
-        ckpt_path = _download_checkpoint(run, CACHE_DIR)
-        cfg = _apply_config_override(run.config, run_id)
-        wrapper, scaler = _load_wrapper(cfg, ckpt_path, device)
+        ckpt_path = download_best_checkpoint(run, CACHE_DIR)
+        cfg = apply_config_overrides(run.config, run_id)
+        wrapper, scaler = load_supcon_wrapper(cfg, ckpt_path, device)
         emb = _collect_embeddings(
             wrapper,
             scaler,
