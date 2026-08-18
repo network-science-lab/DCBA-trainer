@@ -10,6 +10,23 @@ from lightning.pytorch.callbacks import (
 from lightning.pytorch.utilities.model_summary import summarize
 
 
+class ConfigPatienceEarlyStopping(EarlyStopping):
+    """``EarlyStopping`` that keeps the configured ``patience`` when resuming from a checkpoint.
+    """
+
+    @property
+    def state_key(self) -> str:
+        """Mirror ``EarlyStopping``'s state key so checkpoints stay interoperable.
+        """
+        return f"EarlyStopping{ {'monitor': self.monitor, 'mode': self.mode}!r}"
+
+    def load_state_dict(self, state_dict: dict) -> None:
+        """Restore early-stopping counters, keeping the configured ``patience``."""
+        configured_patience = self.patience
+        super().load_state_dict(state_dict)
+        self.patience = configured_patience
+
+
 class WandbModelSummaryCallback(Callback):
     """Log model summary to W&B as an HTML panel and a text artifact."""
 
@@ -66,7 +83,7 @@ def get_callbacks(config: dict) -> list[Callback]:
             )
         elif name == "early_stopping":
             callbacks.append(
-                EarlyStopping(
+                ConfigPatienceEarlyStopping(
                     monitor=cb.get("monitor"),
                     mode=cb.get("mode", "min"),
                     patience=cb.get("patience", 10),
