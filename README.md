@@ -95,7 +95,20 @@ is given, `resume` defaults to `allow`, so metrics and steps continue on the ori
 Drop the `hydra.run.dir` override to resume the training state but write the continuation into a new
 timestamped directory instead. `ckpt_path`, `logger.id`, and `logger.resume` are not set in the
 shipped configs, so they are passed with Hydra's `+` (append) syntax; omitting them entirely trains
-from scratch as before.
+from scratch as before. The `+` prefix is _only_ for keys the config does not already define —
+overriding a key that is in the config (`training.max_epochs`, `training.logger.name`,
+`training.callbacks.1.patience`, ...) with `+` fails with `Could not append to config`, so pass
+those without the prefix. Watch out for stray whitespace or newlines inside an argument when pasting
+a multi-line command: Hydra rejects them with a cryptic `LexerNoViableAltException` pointing at the
+start of the override.
+
+Early-stopping `patience` is a special case worth knowing about: Lightning's
+`EarlyStopping.load_state_dict` restores it from the checkpoint alongside `wait_count` and
+`best_score`, so a resumed run would revert to the patience the original run was launched with —
+exactly the value one usually wants to raise when continuing a training. `get_callbacks` therefore
+builds a `ConfigPatienceEarlyStopping`, which restores the counters but keeps `patience` from the
+config, so `training.callbacks.<i>.patience=10` takes effect on resume as written. Optimiser and
+LR-scheduler state still come from the checkpoint, as they should.
 
 Sweep (hyperparameter tuning):
 
