@@ -70,7 +70,7 @@ Use cases:
 Training:
 
 ```bash
-uv run dcba-train --config-name base
+uv run dcba-train --config-name gps-ae-supcon-log-scaler-no-weights
 ```
 
 Resume training (e.g. after a crash or a full disk): point `training.ckpt_path` at a Lightning
@@ -95,7 +95,20 @@ is given, `resume` defaults to `allow`, so metrics and steps continue on the ori
 Drop the `hydra.run.dir` override to resume the training state but write the continuation into a new
 timestamped directory instead. `ckpt_path`, `logger.id`, and `logger.resume` are not set in the
 shipped configs, so they are passed with Hydra's `+` (append) syntax; omitting them entirely trains
-from scratch as before.
+from scratch as before. The `+` prefix is _only_ for keys the config does not already define —
+overriding a key that is in the config (`training.max_epochs`, `training.logger.name`,
+`training.callbacks.1.patience`, ...) with `+` fails with `Could not append to config`, so pass
+those without the prefix. Watch out for stray whitespace or newlines inside an argument when pasting
+a multi-line command: Hydra rejects them with a cryptic `LexerNoViableAltException` pointing at the
+start of the override.
+
+Early-stopping `patience` is a special case worth knowing about: Lightning's
+`EarlyStopping.load_state_dict` restores it from the checkpoint alongside `wait_count` and
+`best_score`, so a resumed run would revert to the patience the original run was launched with —
+exactly the value one usually wants to raise when continuing a training. `get_callbacks` therefore
+builds a `ConfigPatienceEarlyStopping`, which restores the counters but keeps `patience` from the
+config, so `training.callbacks.<i>.patience=10` takes effect on resume as written. Optimiser and
+LR-scheduler state still come from the checkpoint, as they should.
 
 Sweep (hyperparameter tuning):
 
@@ -117,6 +130,46 @@ interactive filtering in the UI:
 ```bash
 uv run python scripts/analyse_predictions.py <entity>/dcba/<run_id> --within-k 1
 ```
+
+To evaluate a trained run on a **different dataset than the one it was trained on** (e.g. the harder
+`abcd-borderline` set instead of `abcd-big`), recompute its predictions locally with
+`scripts/compute_test_predictions.py`. For each run id passed on the command line it downloads the
+best-epoch checkpoint (never `last.ckpt`), rebuilds the wrapper from the run's logged config, and
+writes predictions for every dataset in `--datasets` to
+`.analysis/<run_id>/predictions_<dataset>.table.json`. How "test" is defined follows from the run's
+own config: the dataset it was trained on is evaluated on that run's actual test split (same
+`val_ratio`/`test_ratio`/seed it logged), while any other dataset — which the run has never seen —
+is evaluated in its entirety:
+
+```bash
+# run 9dbudg6f on the borderline set only (both defaults)
+uv run python scripts/compute_test_predictions.py
+
+# any other run, on both datasets
+uv run python scripts/compute_test_predictions.py <run_id> --datasets abcd-borderline abcd-big
+```
+
+The output file uses the same schema as the `test/predictions` table logged to wandb, plus a `meta`
+block recording which run, checkpoint, dataset, and test scope it was computed from — so
+`analyse_predictions.py` computes exactly the same per-variable metrics and report from it via
+`--predictions-file` — offline, with no wandb calls at all (no fetch, no re-upload):
+
+```bash
+uv run python scripts/analyse_predictions.py \
+  --predictions-file .analysis/9dbudg6f/predictions_abcd-borderline.table.json \
+  --dump-dir .analysis/9dbudg6f/report-abcd-borderline \
+  --within-k 1
+```
+
+Every artefact states its source rather than relying on where it sits: the report's title page reads
+`Source: 9dbudg6f -- abcd-borderline (whole dataset)`, the same line is printed above the metrics on
+stdout, and the file names carry a `<run_id>-<dataset>` slug
+(`analysis_report_9dbudg6f-abcd-borderline.pdf`, `regression_metrics_9dbudg6f-abcd-borderline.csv`
+/`.tex`, and the wandb report artifact `test-report-<run_id>-<dataset>`). Reports for two datasets
+can therefore live in one directory, or be moved out of it, without becoming ambiguous.
+
+Both scripts need a wandb API key (from `wandb login`, `.netrc`, or `WANDB_API_KEY` in `.env`) and
+the datasets already pulled via `dvc pull`.
 
 Embedding stability analysis (checks whether distance in raw `θ` space is preserved by the trained
 `h_G` / `h_θ` embeddings, for the gps-ae-supcon runs logged to W&B):

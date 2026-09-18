@@ -14,6 +14,7 @@ from torch import Tensor
 
 from dcba.dataset import ABCDBaseConfigScaler
 from dcba.dataset.scalers import ABCD_CONFIG_KEYS
+from dcba.eval.predictions_table import build_predictions_table
 from dcba.wrappers.base import DCBABaseWrapper
 
 
@@ -115,6 +116,27 @@ class DCBASupConWrapper(DCBABaseWrapper):
         z_theta = F.normalize(self._config_encoder.encode(config), dim=-1)
         return z_g, z_theta
 
+    @torch.no_grad()
+    def encode_and_reconstruct(self, batch: DCBAHeteroData) -> tuple[Tensor, Tensor, Tensor]:
+        """
+        Compute ``(theta, theta_hat_regr, theta_hat_cross)`` for a batch, without loss or logging.
+
+        Same computation as :meth:`_step`'s regression path, minus the loss terms and ``self.log``
+        calls -- for offline analysis scripts (e.g. ``scripts/compute_test_predictions.py``) that
+        call this outside a wired :class:`~lightning.pytorch.Trainer`, where ``self.log`` would
+        raise.
+
+        :param batch: Batched heterogeneous graph data with ``.config`` attached.
+
+        :returns: ``theta`` (ground truth), ``theta_hat_regr`` (config-encoder self-reconstruction),
+            and ``theta_hat_cross`` (graph-encoder -> theta-decoder cross-modal prediction).
+        """
+        config = self._unpack_batch(batch)
+        z_g, z_theta = self.encode(batch)
+        theta_hat_zt = self._config_encoder.decode(z_theta)
+        theta_hat_zg = self._config_encoder.decode(z_g)
+        return config, theta_hat_zt, theta_hat_zg
+
     def _step(self, batch: DCBAHeteroData, stage: str) -> tuple[Tensor, Tensor, Tensor, Tensor]:
         config = self._unpack_batch(batch)
         batch_size = cast(int, batch.batch_size)
@@ -143,6 +165,14 @@ class DCBASupConWrapper(DCBABaseWrapper):
                 self.log(
                     f"{stage}_loss-cluster-usage-entropy", usage_entropy, batch_size=batch_size
                 )
+            # Diagnostics rather than loss components (see GPSEncoderShape). The cut is the
+            # fraction of edge volume kept inside a slot, and `1 - cut` tracks xi. Modularity says
+            # whether the learned slots are communities at all: ground-truth ABCD partitions score
+            # ~0.41, so a value near 0 means the size and density channels describe nothing.
+            for name, attribute in (("cut", "normalised_cut"), ("modularity", "modularity")):
+                value = getattr(self._graph_encoder, attribute, None)
+                if value is not None:
+                    self.log(f"{stage}_loss-cluster-{name}", value, batch_size=batch_size)
 
         self.log(f"{stage}_loss", loss, prog_bar=True, batch_size=batch_size)
         self.log(f"{stage}_loss-reg-t", l_reg_zt, batch_size=batch_size)
@@ -183,25 +213,19 @@ class DCBASupConWrapper(DCBABaseWrapper):
             )
 
     def on_test_epoch_end(self) -> None:
-        """Log a wandb Table with original θ, config reconstruction, and cross-modal predictions.
+        """
+        Log a wandb Table with original θ, config reconstruction, and cross-modal predictions.
 
-        Each sample occupies three rows:
-
-        - ``{i}-orig``: original θ
-        - ``{i}-regr``: MLP reconstruction - ``config_encoder.decode(config_encoder.encode(θ))``
-        - ``{i}-crsm``: cross-modal prediction - ``config_encoder.decode(graph_encoder.encode(G))``
+        Row layout built by :func:`~dcba.eval.predictions_table.build_predictions_table`, shared
+        with ``scripts/compute_test_predictions.py``'s local (non-wandb) equivalent.
         """
         if not isinstance(self.logger, WandbLogger):
             return
         if isinstance(self.logger.experiment, MagicMock):
             return
 
-        suffix = "" if self._scaler is not None else "_norm"
-        columns = ["sample", "instance", "replica"] + [f"{k}{suffix}" for k in ABCD_CONFIG_KEYS]
-        rows = []
-        for i, (instance, replica, orig, recon, cross) in enumerate(self._test_rows):
-            rows.append([f"{i}-orig", instance, replica] + orig)
-            rows.append([f"{i}-regr", instance, replica] + recon)
-            rows.append([f"{i}-crsm", instance, replica] + cross)
+        columns, rows = build_predictions_table(
+            self._test_rows, ABCD_CONFIG_KEYS, has_scaler=self._scaler is not None
+        )
         table = wandb.Table(columns=columns, data=rows)
         self.logger.experiment.log({"test/predictions": table})

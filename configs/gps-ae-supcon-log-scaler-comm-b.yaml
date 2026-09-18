@@ -12,7 +12,7 @@ data:
     name: ABCDLogConfigScaler
   val_ratio: 0.10
   test_ratio: 0.10
-  batch_size: 32
+  batch_size: 64
   num_workers: 0
 
 models:
@@ -45,7 +45,7 @@ training:
   wrapper: supcon
   accelerator: gpu
   devices: [0]
-  max_epochs: 200
+  max_epochs: 20
   # SupCon (temperature 0.07) produces occasional hard-batch gradient spikes; clip identically
   # across scaler-comparison runs so the cap is not a confound.
   gradient_clip_val: 1.0
@@ -76,6 +76,7 @@ training:
     tags:
       [
         gps,
+        b64,
         community-features,
         abcd-constraint,
         bidirectional,
@@ -93,6 +94,6 @@ training:
     - name: early_stopping
       monitor: val_loss
       mode: min
-      patience: 10
+      patience: 3
     - name: model_summary
       max_depth: -1

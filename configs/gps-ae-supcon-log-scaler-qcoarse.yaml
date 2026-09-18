@@ -7,7 +7,7 @@ random_seed: 42
 data:
   dataset_root: "abcd-big"
   transform: ABCDConfigToTensor
-  node_transform: CommunityToSize
+  node_transform: ConstantNodeFeatures
   scaler:
     name: ABCDLogConfigScaler
   val_ratio: 0.10
@@ -26,14 +26,8 @@ models:
     output_dim: 9
     dropout: 0.1
     attn_dropout: 0.1
-    # Learned soft-clustering pool (see GPSEncoder docstring). num_clusters is a budget the model
-    # can under-use, not a per-graph community count -- set well above the largest expected count.
     num_clusters: 128
-    # Quantile levels read off the per-slot soft cluster sizes (see GPSEncoder._cluster_pool).
-    cluster_size_quantiles:
-      [0.01, 0.05, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 0.95, 0.99]
-    # Disable the usage-entropy aux term: its minimum is all mass on a single slot, which
-    # collapses the cluster-size distribution the quantiles above read. Per-node entropy stays.
+    cluster_size_quantiles: [0.25, 0.5, 0.75, 0.99]
     usage_entropy_weight: 0.0
   theta:
     cls: ConfigAutoEncoder
@@ -45,18 +39,14 @@ training:
   wrapper: supcon
   accelerator: gpu
   devices: [0]
-  max_epochs: 200
-  # SupCon (temperature 0.07) produces occasional hard-batch gradient spikes; clip identically
-  # across scaler-comparison runs so the cap is not a confound.
+  max_epochs: 20
   gradient_clip_val: 1.0
-  aux_weight: 0.1 # weight on the cluster-assignment entropy loss
+  aux_weight: 0.1
   losses:
     reg:
       name: abcd_constraint
       args:
         lambda_penalty: 1.0
-        # Same weights as gps-ae-supcon-base-scaler.yaml, kept fixed so this run isolates the
-        # scaler change. Re-derive with scripts/derive_output_weights.py once trained.
         weights: [1.028, 1.068, 1.959, 1.320, 1.034, 1.435, 1.473, 1.138, 1.029]
     repr:
       name: supcon
@@ -72,16 +62,17 @@ training:
       weight_decay: 0.00001
   logger:
     project: dcba
-    name: gps-ae-supcon-log-scaler-comm
+    name: gps-ae-supcon-log-scaler-qcoarse
     tags:
       [
         gps,
-        community-features,
+        no-community-features,
         abcd-constraint,
         bidirectional,
         cluster-pool,
         reweighted,
         log-scaler,
+        q-ablation,
       ]
   callbacks:
     - name: model_checkpoint
@@ -93,6 +84,6 @@ training:
     - name: early_stopping
       monitor: val_loss
       mode: min
-      patience: 10
+      patience: 3
     - name: model_summary
       max_depth: -1

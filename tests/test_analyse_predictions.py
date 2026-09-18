@@ -1,5 +1,6 @@
 """Unit tests for the pure reshaping/formatting logic in scripts/analyse_predictions.py."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -7,7 +8,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
-from analyse_predictions import _compute_metrics_df, _reshape_predictions  # noqa: E402
+from analyse_predictions import (  # noqa: E402
+    _compute_metrics_df,
+    _load_local_predictions_table,
+    _reshape_predictions,
+    _source_labels,
+)
 
 
 class TestReshapePredictions:
@@ -88,3 +94,80 @@ class TestComputeMetricsRows:
         df = _compute_metrics_df(self._ORIG, self._REGR, self._CROSS, self._KEYS, within_k=1)
         assert df.loc[df["variable"] == "xi", "within_k_accuracy"].isna().all()
         assert df.loc[df["variable"] == "n", "within_k_accuracy"].notna().all()
+
+
+class TestLoadLocalPredictionsTable:
+    """Tests for _load_local_predictions_table."""
+
+    def test_round_trips_columns_and_data(self, tmp_path: Path) -> None:
+        """A file written by compute_test_predictions.py reshapes identically to a wandb table."""
+        columns = ["sample", "instance", "replica", "n_norm", "xi_norm"]
+        data = [
+            ["0-orig", "inst-a", 0, 100.0, 0.3],
+            ["0-regr", "inst-a", 0, 101.0, 0.31],
+            ["0-crsm", "inst-a", 0, 98.0, 0.29],
+        ]
+        path = tmp_path / "predictions_abcd-big.table.json"
+        path.write_text(json.dumps({"columns": columns, "data": data}), encoding="utf-8")
+
+        loaded_columns, loaded_data, _ = _load_local_predictions_table(path)
+
+        assert loaded_columns == columns
+        assert loaded_data == data
+        orig, regr, cross, keys, _ = _reshape_predictions(loaded_columns, loaded_data)
+        assert keys == ["n", "xi"]
+        np.testing.assert_array_equal(orig, [[100.0, 0.3]])
+        np.testing.assert_array_equal(regr, [[101.0, 0.31]])
+        np.testing.assert_array_equal(cross, [[98.0, 0.29]])
+
+    def test_returns_meta_block(self, tmp_path: Path) -> None:
+        """The meta block naming the run and dataset is returned as stored."""
+        meta = {"run_id": "9dbudg6f", "dataset": "abcd-borderline", "test_scope": "whole_dataset"}
+        path = tmp_path / "predictions_abcd-borderline.table.json"
+        path.write_text(
+            json.dumps({"columns": ["sample"], "data": [], "meta": meta}), encoding="utf-8"
+        )
+
+        assert _load_local_predictions_table(path)[2] == meta
+
+    def test_meta_defaults_to_empty_for_older_files(self, tmp_path: Path) -> None:
+        """A predictions file written before the meta block existed still loads."""
+        path = tmp_path / "predictions_abcd-big.table.json"
+        path.write_text(json.dumps({"columns": ["sample"], "data": []}), encoding="utf-8")
+
+        assert _load_local_predictions_table(path)[2] == {}
+
+
+class TestSourceLabels:
+    """Tests for _source_labels."""
+
+    def test_names_run_dataset_and_scope(self) -> None:
+        """A full meta block yields a title and slug naming both the run and the dataset."""
+        meta = {"run_id": "9dbudg6f", "dataset": "abcd-borderline", "test_scope": "whole_dataset"}
+
+        title, slug = _source_labels(meta, fallback="ignored")
+
+        assert title == "9dbudg6f -- abcd-borderline (whole dataset)"
+        assert slug == "9dbudg6f-abcd-borderline"
+
+    def test_spells_out_own_test_split_scope(self) -> None:
+        """The run's own held-out split is labelled as such, not as the whole dataset."""
+        meta = {"run_id": "9dbudg6f", "dataset": "abcd-big", "test_scope": "own_test_split"}
+
+        title, slug = _source_labels(meta, fallback="ignored")
+
+        assert title == "9dbudg6f -- abcd-big (own test split)"
+        assert slug == "9dbudg6f-abcd-big"
+
+    def test_omits_unknown_scope(self) -> None:
+        """An absent or unrecognised scope drops the parenthetical instead of inventing one."""
+        meta = {"run_id": "9dbudg6f", "dataset": "abcd-big"}
+
+        assert _source_labels(meta, fallback="ignored")[0] == "9dbudg6f -- abcd-big"
+
+    def test_falls_back_when_dataset_unknown(self) -> None:
+        """Without a dataset there is nothing to append, so the fallback identifier is used."""
+        assert _source_labels({}, fallback="predictions_abcd-big.table") == (
+            "predictions_abcd-big.table",
+            "predictions_abcd-big.table",
+        )

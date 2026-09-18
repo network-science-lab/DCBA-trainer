@@ -1,4 +1,4 @@
-"""Per-variable regression diagnostics for a supcon test run, re-uploaded to wandb."""
+"""Per-variable regression diagnostics for a supcon test run's predictions, from wandb or local."""
 
 import argparse
 import json
@@ -28,14 +28,35 @@ _METRIC_COLUMNS = [
 ]
 
 
+#: Fallback run path used when neither ``run_path`` nor ``--predictions-file`` is given.
+_DEFAULT_RUN_PATH = "network-science-lab/DCBA/9dbudg6f"
+
+
 def _parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "run_path",
         nargs="?",
-        default="network-science-lab/DCBA/2kolqt2w",
-        help="wandb run path, e.g. entity/project/run_id",
+        default=None,
+        help="wandb run path, e.g. entity/project/run_id. Mutually exclusive with "
+        f"--predictions-file; defaults to {_DEFAULT_RUN_PATH} if neither is given.",
+    )
+    parser.add_argument(
+        "--predictions-file",
+        type=Path,
+        default=None,
+        help="Local *.table.json file (as written by scripts/compute_test_predictions.py) to "
+        "analyse instead of fetching from wandb. Mutually exclusive with run_path; the "
+        "predictions table itself is never fetched from wandb, but the resulting report is "
+        "still uploaded to the source run named in the file's meta block, if any.",
+    )
+    parser.add_argument(
+        "--dataset",
+        default=None,
+        help="Analyse the 'predictions-<run_id>-<dataset>' W&B artifact for this dataset "
+        "(as logged by scripts/compute_test_predictions.py) instead of the run's own test "
+        "split. Only valid together with run_path; mutually exclusive with --predictions-file.",
     )
     parser.add_argument(
         "--within-k",
@@ -49,7 +70,14 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="If set, also write the analysis payload to this directory for offline inspection.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.run_path is not None and args.predictions_file is not None:
+        parser.error("run_path and --predictions-file are mutually exclusive")
+    if args.dataset is not None and args.predictions_file is not None:
+        parser.error("--dataset and --predictions-file are mutually exclusive")
+    if args.run_path is None and args.predictions_file is None:
+        args.run_path = _DEFAULT_RUN_PATH
+    return args
 
 
 def _fetch_predictions_table(run: Run) -> tuple[list[str], list[list]]:
@@ -76,6 +104,72 @@ def _fetch_predictions_table(run: Run) -> tuple[list[str], list[list]]:
             table_json = json.load(f)
 
     return table_json["columns"], table_json["data"]
+
+
+def _fetch_predictions_artifact(run: Run, dataset: str) -> tuple[list[str], list[list], dict]:
+    """
+    Download the ``predictions-<run_id>-<dataset>`` artifact logged by compute_test_predictions.py.
+
+    :param run: The W&B run the artifact was logged on.
+    :param dataset: Dataset name the artifact was computed against, e.g. ``"abcd-borderline"``.
+
+    :returns: Tuple of ``(columns, data, meta)`` as stored in the artifact's JSON file.
+    """
+    artifact_path = f"{run.entity}/{run.project}/predictions-{run.id}-{dataset}:latest"
+    artifact = wandb.Api().artifact(artifact_path)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        artifact_dir = Path(artifact.download(root=tmp_dir))
+        table_path = next(artifact_dir.rglob("*.table.json"))
+        with table_path.open(encoding="utf-8") as f:
+            table_json = json.load(f)
+
+    return table_json["columns"], table_json["data"], table_json.get("meta", {})
+
+
+def _load_local_predictions_table(path: Path) -> tuple[list[str], list[list], dict]:
+    """
+    Load a local ``*.table.json`` predictions file, matching :func:`_fetch_predictions_table`.
+
+    Reads the file written by ``scripts/compute_test_predictions.py``, which uses the same
+    ``{"columns": [...], "data": [...]}`` schema as the wandb run-table artifact (see
+    :func:`~dcba.eval.predictions_table.build_predictions_table`), so no downstream reshaping
+    logic needs to change, plus a ``meta`` block naming the run and dataset it was computed from.
+
+    :param path: Path to the local JSON file.
+
+    :returns: Tuple of ``(columns, data, meta)`` as stored in the file; ``meta`` is empty for a
+        file written before that block existed.
+    """
+    with path.open(encoding="utf-8") as f:
+        table_json = json.load(f)
+    return table_json["columns"], table_json["data"], table_json.get("meta", {})
+
+
+def _source_labels(meta: dict, fallback: str) -> tuple[str, str]:
+    """
+    Build the human-readable title and the file-name slug identifying the analysed predictions.
+
+    Both name the run *and* the dataset, so a report cannot be mistaken for one computed on a
+    different dataset once it is moved out of its directory or uploaded.
+
+    :param meta: Metadata block describing the source, as written by
+        ``scripts/compute_test_predictions.py``'s ``_build_meta`` (may be empty or partial).
+    :param fallback: Identifier to fall back on when ``meta`` names no run -- the wandb run id, or
+        the predictions file's stem.
+
+    :returns: Tuple of ``(title, slug)``; the title reads e.g.
+        ``9dbudg6f -- abcd-borderline (whole dataset)`` and the slug ``9dbudg6f-abcd-borderline``.
+    """
+    run_id = meta.get("run_id") or fallback
+    dataset = meta.get("dataset")
+    if dataset is None:
+        return run_id, run_id
+
+    scope = {"own_test_split": "own test split", "whole_dataset": "whole dataset"}.get(
+        meta.get("test_scope", "")
+    )
+    title = f"{run_id} -- {dataset}" + (f" ({scope})" if scope else "")
+    return title, f"{run_id}-{dataset}"
 
 
 def _reshape_predictions(
@@ -157,12 +251,15 @@ def _print_metrics_df(metrics_df: pd.DataFrame) -> None:
     print(metrics_df.to_string(index=False, na_rep=""))
 
 
-def _render_metrics_table_figure(tables: list[tuple[str, pd.DataFrame]], run_id: str) -> plt.Figure:
+def _render_metrics_table_figure(
+    tables: list[tuple[str, pd.DataFrame]], source_label: str
+) -> plt.Figure:
     """
     Render one metrics table per path side by side in a single matplotlib figure.
 
     :param tables: ``(title, metrics_df)`` pairs, one per path, rendered left to right in order.
-    :param run_id: wandb run id, printed as the report's title-page header.
+    :param source_label: Run and dataset the metrics were computed from, printed as the report's
+        title-page header.
 
     :returns: The created figure. Caller owns it and is responsible for closing it.
     """
@@ -181,9 +278,57 @@ def _render_metrics_table_figure(tables: list[tuple[str, pd.DataFrame]], run_id:
         table.set_fontsize(8)
         table.auto_set_column_width(col=list(range(len(df.columns))))
         ax.set_title(title, fontweight="bold")
-    fig.suptitle(f"Run ID: {run_id}", fontsize=10)
+    fig.suptitle(f"Source: {source_label}", fontsize=10)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     return fig
+
+
+def _resolve_upload_run(run_path: str | None) -> Run | None:
+    """
+    Fetch the W&B run a local predictions file names, for uploading the report to.
+
+    Only called when analysing a local ``--predictions-file`` -- makes no wandb call at all when
+    the file's ``meta`` block has no ``run_path`` (e.g. a file written before that field existed).
+
+    :param run_path: Full ``entity/project/run_id`` path from the file's ``meta`` block, or
+        ``None`` if the file names no run.
+
+    :returns: The resolved run, or ``None`` if ``run_path`` is ``None``.
+    """
+    return wandb.Api().run(run_path) if run_path is not None else None
+
+
+def _upload_report(
+    run: Run,
+    metrics_df: pd.DataFrame,
+    pdf_path: Path,
+    report_dir: Path,
+    dataset: str | None,
+    slug: str,
+) -> None:
+    """
+    Log the metrics table and PDF report to ``run``'s W&B history and artifacts.
+
+    The metrics table is logged under a dataset-specific key rather than the fixed
+    ``test/regression_metrics``, so evaluating one run against several datasets (e.g. its own
+    ``abcd-big`` test split and the held-out ``abcd-borderline`` set) doesn't have the second
+    evaluation silently overwrite the first in the run's history.
+
+    :param run: The W&B run to attach the report to.
+    :param metrics_df: Metrics, as returned by :func:`_compute_metrics_df`.
+    :param pdf_path: Local path of the rendered PDF report.
+    :param report_dir: Directory ``pdf_path`` lives under, used as the W&B save base path.
+    :param dataset: Name of the dataset the predictions were computed against, or ``None`` if it
+        could not be determined -- falls back to the fixed, undated key in that case.
+    :param slug: Run+dataset identifier used to name the uploaded report artifact.
+    """
+    metric_key = f"test/regression_metrics_{dataset}" if dataset else "test/regression_metrics"
+    with wandb.init(id=run.id, project=run.project, entity=run.entity, resume="must") as wrt_t:
+        wrt_t.log({metric_key: wandb.Table(dataframe=metrics_df)})
+        wrt_t.save(str(pdf_path), base_path=str(report_dir), policy="now")
+        wrt_t.log_artifact(
+            artifact_or_path=str(pdf_path), name=f"test-report-{slug}", type="report"
+        )
 
 
 def build_pdf_report(
@@ -193,7 +338,7 @@ def build_pdf_report(
     regr: np.ndarray,
     cross: np.ndarray,
     keys: list[str],
-    run_id: str,
+    source_label: str,
 ) -> None:
     """
     Render the metrics tables and every per-variable scatter/residual plot into one PDF.
@@ -207,7 +352,8 @@ def build_pdf_report(
     :param regr: ``(N, 9)`` config-encoder self-reconstruction predictions.
     :param cross: ``(N, 9)`` graph-encoder -> theta cross-modal predictions.
     :param keys: Variable names, in column order.
-    :param run_id: wandb run id, printed on the report's title page.
+    :param source_label: Run and dataset the metrics were computed from, printed on the report's
+        title page.
     """
     with PdfPages(pdf_path) as pdf:
         tables = [
@@ -217,7 +363,7 @@ def build_pdf_report(
             )
             for mode in ("regr", "cross")
         ]
-        table_fig = _render_metrics_table_figure(tables, run_id=run_id)
+        table_fig = _render_metrics_table_figure(tables, source_label=source_label)
         pdf.savefig(table_fig)
         plt.close(table_fig)
 
@@ -235,15 +381,46 @@ def build_pdf_report(
 
 
 def main() -> None:
-    """Fetch predictions for a run, compute diagnostics, and re-upload them to the same run."""
+    """
+    Compute per-variable regression diagnostics for a run's or a local file's test predictions.
+
+    Given ``--predictions-file``, reads a local JSON file and never fetches from wandb, but still
+    uploads the resulting report to the source run named in the file's ``meta`` block (skipped if
+    that run is unknown). Given ``--dataset``, fetches that dataset's ``predictions-<run_id>-
+    <dataset>`` artifact for ``run_path`` instead of the run's own test split. Otherwise fetches
+    the run's own ``test/predictions`` table for ``run_path``. Either wandb path re-uploads the
+    report to that same run.
+    """
     args = _parse_args()
 
-    api = wandb.Api()
-    run = api.run(args.run_path)
+    if args.predictions_file is not None:
+        run = None
+        columns, data, source_meta = _load_local_predictions_table(args.predictions_file)
+        fallback = args.predictions_file.stem
+    else:
+        api = wandb.Api()
+        run = api.run(args.run_path)
+        if args.dataset is not None:
+            columns, data, source_meta = _fetch_predictions_artifact(run, args.dataset)
+            source_meta.setdefault("run_path", args.run_path)
+            fallback = f"{run.id}-{args.dataset}"
+        else:
+            columns, data = _fetch_predictions_table(run)
+            # The wandb table is logged by the run's own test loop, so it is always that run's
+            # held-out split of the dataset it was trained on.
+            source_meta = {
+                "run_id": run.id,
+                "run_path": args.run_path,
+                "dataset": Path(run.config["data"]["dataset_root"]).name,
+                "test_scope": "own_test_split",
+            }
+            fallback = run.id
+    source_label, slug = _source_labels(source_meta, fallback)
+    dataset = source_meta.get("dataset")
 
-    columns, data = _fetch_predictions_table(run)
     orig, regr, cross, keys, meta = _reshape_predictions(columns, data)
 
+    print(f"Source: {source_label}")
     metrics_df = _compute_metrics_df(orig, regr, cross, keys, args.within_k)
     _print_metrics_df(metrics_df)
 
@@ -253,18 +430,24 @@ def main() -> None:
     with report_dir_ctx as report_dir:
         report_dir = Path(report_dir)
         report_dir.mkdir(parents=True, exist_ok=True)
-        pdf_path = report_dir / "analysis_report.pdf"
-        build_pdf_report(pdf_path, metrics_df, orig, regr, cross, keys, run_id=run.id)
+        # Every file carries the run and dataset in its name, so a report stays identifiable once
+        # it is copied out of its directory or uploaded next to another dataset's report.
+        pdf_path = report_dir / f"analysis_report_{slug}.pdf"
+        build_pdf_report(pdf_path, metrics_df, orig, regr, cross, keys, source_label=source_label)
 
-        metrics_df.to_csv(report_dir / "regression_metrics.csv", index=False, encoding="utf-8")
-        metrics_df.to_latex(report_dir / "regression_metrics.tex", index=False, encoding="utf-8")
+        metrics_df.to_csv(
+            report_dir / f"regression_metrics_{slug}.csv", index=False, encoding="utf-8"
+        )
+        metrics_df.to_latex(
+            report_dir / f"regression_metrics_{slug}.tex", index=False, encoding="utf-8"
+        )
 
-        with wandb.init(id=run.id, project=run.project, entity=run.entity, resume="must") as wrt_t:
-            wrt_t.log({"test/regression_metrics": wandb.Table(dataframe=metrics_df)})
-            wrt_t.save(str(pdf_path), base_path=str(report_dir), policy="now")
-            wrt_t.log_artifact(
-                artifact_or_path=str(pdf_path), name=f"test-report-{run.id}", type="report"
-            )
+        upload_run = run if run is not None else _resolve_upload_run(source_meta.get("run_path"))
+        if upload_run is None:
+            print(f"No source run recorded; report written to {report_dir} only")
+        else:
+            _upload_report(upload_run, metrics_df, pdf_path, report_dir, dataset, slug)
+            print(f"Report uploaded to {upload_run.id}; also written to {report_dir}")
 
 
 if __name__ == "__main__":

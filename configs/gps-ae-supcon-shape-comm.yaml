@@ -1,0 +1,118 @@
+hydra:
+  run:
+    dir: .trainings/${now:%Y-%m-%d}/${now:%H-%M-%S}
+
+random_seed: 42
+
+data:
+  dataset_root: "abcd-big"
+  transform: ABCDConfigToTensor
+  node_transform: CommunityToSize
+  scaler:
+    name: ABCDLogConfigScaler
+  val_ratio: 0.10
+  test_ratio: 0.10
+  batch_size: 32
+  num_workers: 0
+
+models:
+  graph:
+    cls: GPSEncoderShape
+    attn_type: performer
+    hidden_dim: 64
+    num_layers: 2
+    num_heads: 4
+    embedding_dim: 64
+    output_dim: 9
+    dropout: 0.1
+    attn_dropout: 0.1
+    num_clusters: 64
+    cluster_size_quantiles:
+      [0.01, 0.05, 0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.9, 0.95, 0.99]
+    # Both inherited entropy terms off. usage_entropy is minimised by all mass on a single slot.
+    # node_entropy pushes each node to a one-hot assignment and, measured on run z7pulj4r, is what
+    # collapsed the branch: its range is log(num_clusters) = 4.16 against modularity's ~0.41, so it
+    # outvoted the term meant to hold the clustering together and the effective slot count fell from
+    # 56 to 1.8 out of 64 within 140 steps, with modularity going negative. Modularity alone shapes
+    # the assignment now -- it penalises the uniform solution as well (Q = 0 there, same as collapse),
+    # so nothing is left unguarded.
+    usage_entropy_weight: 0.0
+    node_entropy_weight: 0.05
+    # Soft modularity: the only term tying the learned slots to the graph's edges, and therefore the
+    # precondition for the density and cut channels above to describe communities rather than an
+    # arbitrary partition of the hidden space. Used instead of MinCutPool's normalised cut, which is
+    # maximised by collapsing every node into one slot (measured on 100% of graphs) and so needs an
+    # orthogonality counterweight that in turn pushes towards using every slot -- the fragmentation
+    # regime measured as the more destructive failure. Modularity's optimum is the true partition, so
+    # one term and one weight, with no degenerate solution to balance against.
+    modularity_weight: 1.0
+  theta:
+    cls: ConfigAutoEncoder
+    input_dim: 9
+    hidden_dims: [128, 64, 32]
+    embedding_dim: ${models.graph.embedding_dim}
+
+training:
+  wrapper: supcon
+  accelerator: gpu
+  devices: [0]
+  # Kept at 20 to match the earlier runs. Note best checkpoints in .trainings/ sit at epochs 21 and 22,
+  # so a run can still be improving when this cap stops it -- `save_last: true` below plus the
+  # ckpt_path/hydra.run.dir override documented in the README lets it be continued from last.ckpt
+  # rather than restarted.
+  max_epochs: 20
+  # SupCon (temperature 0.07) produces occasional hard-batch gradient spikes; clip identically
+  # across scaler-comparison runs so the cap is not a confound.
+  gradient_clip_val: 1.0
+  aux_weight: 0.1 # weight on the cluster-assignment entropy loss
+  losses:
+    reg:
+      name: abcd_constraint
+      args:
+        lambda_penalty: 1.0
+        # Carried over from gps-ae-supcon-log-scaler.yaml so this run isolates the encoder change.
+        # They still say which parameters were hard, and the hard ones stay hard -- but note t2's
+        # 1.959 was derived when ABCD_PARAM_BOUNDS gave t2 a (1, 5) ceiling, i.e. ~4x less gradient
+        # than it now gets, so the effective push on t2 is ~4x larger than when this was measured.
+        # Re-derive with scripts/derive_output_weights.py once trained.
+        weights: [1.028, 1.068, 1.959, 1.320, 1.034, 1.435, 1.473, 1.138, 1.029]
+    repr:
+      name: supcon
+      weight: 0.3
+      args:
+        temperature: 0.07
+        tau_dist: 1.0
+        bidirectional: true
+  optimizer:
+    name: AdamW
+    args:
+      lr: 0.001
+      weight_decay: 0.00001
+  logger:
+    project: dcba
+    name: gps-ae-supcon-shape-comm
+    tags:
+      [
+        gps,
+        community-features,
+        abcd-constraint,
+        bidirectional,
+        cluster-pool,
+        shape-readout,
+        modularity,
+        reweighted,
+        log-scaler,
+      ]
+  callbacks:
+    - name: model_checkpoint
+      monitor: val_loss-reg-g
+      mode: min
+      save_top_k: 1
+      save_last: true
+      verbose: true
+    - name: early_stopping
+      monitor: val_loss
+      mode: min
+      patience: 3
+    - name: model_summary
+      max_depth: -1
