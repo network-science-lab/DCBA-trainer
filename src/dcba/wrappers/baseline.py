@@ -10,7 +10,7 @@ from dcba_data_set.baseline import BaselineConfig
 from dcba_data_set.graph_io.data_models import DCBAHeteroData
 from lightning.pytorch.loggers import WandbLogger
 
-from dcba.dataset.transforms import ABCD_CONFIG_KEYS
+from dcba.dataset.scalers import ABCD_CONFIG_KEYS
 from dcba.wrappers.base import DCBABaseWrapper
 
 

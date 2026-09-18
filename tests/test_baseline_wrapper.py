@@ -5,8 +5,8 @@ import pytest
 from dcba_data_set.graph_io import load_dataset
 from torch_geometric.loader import DataLoader
 
-from dcba.dataset import ABCDConfigScaler, ABCDConfigToTensor, ABCDDataset
-from dcba.dataset.transforms import ABCD_CONFIG_KEYS
+from dcba.dataset import ABCDConfigToTensor, ABCDDataset, ABCDNMaxConfigScaler
+from dcba.dataset.scalers import ABCD_CONFIG_KEYS
 from dcba.utils.paths import TEST_ABCD_DATASET
 from dcba.wrappers import DCBABaselineWrapper
 
@@ -17,7 +17,7 @@ def test_loader() -> DataLoader:
     records = load_dataset(TEST_ABCD_DATASET)
     dataset = ABCDDataset(
         records=records,
-        scaler=ABCDConfigScaler(),
+        scaler=ABCDNMaxConfigScaler(),
         transform=ABCDConfigToTensor(),
         single_replica_per_instance=True,
     )
@@ -26,7 +26,7 @@ def test_loader() -> DataLoader:
 
 def _run_test(wrapper: DCBABaselineWrapper, test_loader: DataLoader) -> list[dict]:
     """Run Trainer.test for the wrapper against the given dataloader, without any logger."""
-    wrapper.set_scaler(ABCDConfigScaler())
+    wrapper.set_scaler(ABCDNMaxConfigScaler())
     trainer = pl.Trainer(
         accelerator="cpu",
         devices=1,
@@ -80,7 +80,7 @@ class TestDCBABaselineWrapperTestStep:
         """test_step refuses a batch with more than one graph."""
         batch = next(iter(DataLoader(test_loader.dataset, batch_size=2)))
         wrapper = DCBABaselineWrapper()
-        wrapper.set_scaler(ABCDConfigScaler())
+        wrapper.set_scaler(ABCDNMaxConfigScaler())
         with pytest.raises(ValueError, match="batch_size=1"):
             wrapper.test_step(batch, 0)
 

@@ -8,9 +8,7 @@ data:
   dataset_root: "abcd-big"
   transform: ABCDConfigToTensor
   scaler:
-    name: ABCDConfigScaler
-    args:
-      n_max: 10000 # upper bound for all node-count-dependent scaler features
+    name: ABCDNMaxConfigScaler
   val_ratio: 0.10
   test_ratio: 0.10
   # BaselineConfig computes structural statistics (communities, degrees) per graph and cannot
