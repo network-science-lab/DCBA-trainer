@@ -117,9 +117,7 @@ class WandbModelSummaryCallback(Callback):
         summary_str = str(summarize(pl_module, max_depth=self.max_depth))
 
         html = (
-            "<pre style='font-family:monospace;white-space:pre;font-size:13px'>"
-            f"{summary_str}"
-            "</pre>"
+            f"<pre style='font-family:monospace;white-space:pre;font-size:13px'>{summary_str}</pre>"
         )
         run.log({"model/summary": wandb.Html(html)}, step=0)
 
@@ -172,7 +170,5 @@ def get_callbacks(config: dict) -> list[Callback]:
             )
             callbacks.append(GradientAccumulationScheduler(scheduling=scheduling))
         elif name == "model_summary":
-            callbacks.append(
-                WandbModelSummaryCallback(max_depth=cb.get("max_depth", -1))
-            )
+            callbacks.append(WandbModelSummaryCallback(max_depth=cb.get("max_depth", -1)))
     return callbacks

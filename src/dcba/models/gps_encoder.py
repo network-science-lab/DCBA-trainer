@@ -163,7 +163,7 @@ class GPSEncoder(nn.Module):
 
         # Per-graph usage entropy over the K slots -- minimising it lets the model concentrate on
         # a sparse subset of slots rather than using all K (see class docstring). Its minimum is a
-        # single occupied slot, so weight 0 disables it when the readout needs a spread cluster_size.
+        # single occupied slot, so weight 0 disables it when the readout needs a spread cluster_size
         usage = cluster_size / cluster_size.sum(dim=-1, keepdim=True).clamp_min(1e-8)
         usage_entropy = -(usage * usage.clamp_min(1e-8).log()).sum(dim=-1).mean()
 
