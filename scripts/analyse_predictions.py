@@ -1,4 +1,4 @@
-"""Per-variable regression diagnostics for a supcon test run's predictions, from wandb or local."""
+"""Per-variable regression diagnostics for a supcon or baseline test run, from wandb or local."""
 
 import argparse
 import json
@@ -174,19 +174,24 @@ def _source_labels(meta: dict, fallback: str) -> tuple[str, str]:
 
 def _reshape_predictions(
     columns: list[str], data: list[list]
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, list[str], pd.DataFrame]:
+) -> tuple[np.ndarray, dict[str, np.ndarray], list[str], pd.DataFrame]:
     """
-    Reshape the flat ``{i}-orig`` / ``{i}-regr`` / ``{i}-crsm`` table rows into arrays.
+    Reshape the flat ``{i}-orig`` / ``{i}-<mode>`` table rows into arrays.
 
-    :param columns: Table column names, as produced by
-        :meth:`~dcba.wrappers.supcon.DCBASupConWrapper.on_test_epoch_end` --
+    Groups rows by whatever kind suffix follows each sample id, so this adapts to however many
+    prediction paths a wrapper logs alongside ``orig`` -- the supcon wrapper logs ``regr`` and
+    ``crsm``, the baseline wrapper logs a single ``pred``.
+
+    :param columns: Table column names, as produced by a wrapper's ``on_test_epoch_end`` (e.g.
+        :meth:`~dcba.wrappers.supcon.DCBASupConWrapper.on_test_epoch_end`) --
         ``["sample", "instance", "replica", <one column per ABCD variable>]``.
     :param data: Table rows in the same column order.
 
-    :returns: Tuple ``(orig, regr, cross, keys, meta)`` where the first three are ``(N, 9)``
-        arrays aligned by sample, ``keys`` are the variable names with any ``_norm`` suffix
-        stripped, and ``meta`` is a DataFrame with ``instance``/``replica`` columns, indexed by
-        the same row position as the arrays.
+    :returns: Tuple ``(orig, predictions, keys, meta)`` where ``orig`` is a ``(N, 9)``
+        ground-truth array, ``predictions`` maps each non-``orig`` kind found in the table to
+        its own ``(N, 9)`` array aligned by sample, ``keys`` are the variable names with any
+        ``_norm`` suffix stripped, and ``meta`` is a DataFrame with ``instance``/``replica``
+        columns, indexed by the same row position as the arrays.
     """
     variable_columns = [c for c in columns if c not in ("sample", "instance", "replica")]
     keys = [c[: -len("_norm")] if c.endswith("_norm") else c for c in variable_columns]
@@ -194,41 +199,44 @@ def _reshape_predictions(
     instance_idx = columns.index("instance")
     replica_idx = columns.index("replica")
 
-    rows_by_kind: dict[str, dict[str, list[float]]] = {"orig": {}, "regr": {}, "crsm": {}}
+    rows_by_kind: dict[str, dict[str, list[float]]] = {}
     metadata: dict[str, tuple[str, int]] = {}
     for row in data:
         sample_id, kind = row[0].rsplit("-", 1)
-        rows_by_kind[kind][sample_id] = row[var_start:]
+        rows_by_kind.setdefault(kind, {})[sample_id] = row[var_start:]
         if kind == "orig":
             metadata[sample_id] = (row[instance_idx], row[replica_idx])
 
     sample_ids = sorted(rows_by_kind["orig"], key=int)
     orig = np.array([rows_by_kind["orig"][i] for i in sample_ids], dtype=float)
-    regr = np.array([rows_by_kind["regr"][i] for i in sample_ids], dtype=float)
-    cross = np.array([rows_by_kind["crsm"][i] for i in sample_ids], dtype=float)
+    predictions = {
+        kind: np.array([rows_by_kind[kind][i] for i in sample_ids], dtype=float)
+        for kind in rows_by_kind
+        if kind != "orig"
+    }
     meta = pd.DataFrame([metadata[i] for i in sample_ids], columns=["instance", "replica"])
-    return orig, regr, cross, keys, meta
+    return orig, predictions, keys, meta
 
 
 def _compute_metrics_df(
-    orig: np.ndarray, regr: np.ndarray, cross: np.ndarray, keys: list[str], within_k: int
+    orig: np.ndarray, predictions: dict[str, np.ndarray], keys: list[str], within_k: int
 ) -> pd.DataFrame:
     """
-    Compute per-variable regression metrics for both prediction paths.
+    Compute per-variable regression metrics for every prediction path.
 
     :param orig: ``(N, 9)`` ground-truth config values.
-    :param regr: ``(N, 9)`` config-encoder self-reconstruction predictions.
-    :param cross: ``(N, 9)`` graph-encoder -> theta cross-modal predictions.
+    :param predictions: Maps each prediction path's mode name (e.g. ``regr``, ``crsm``, ``pred``)
+        to its ``(N, 9)`` array of predicted values.
     :param keys: Variable names, in column order.
     :param within_k: Tolerance for the within-k accuracy metric.
 
-    :returns: DataFrame with one row per ``(variable, path)`` pair, columns as in
+    :returns: DataFrame with one row per ``(variable, mode)`` pair, columns as in
         :data:`_METRIC_COLUMNS`.
     """
     rows = []
-    for mode, predictions in (("regr", regr), ("cross", cross)):
+    for mode, preds in predictions.items():
         metrics = per_variable_regression_metrics(
-            orig, predictions, keys, ABCD_INT_FEATURE_INDICES, within_k
+            orig, preds, keys, ABCD_INT_FEATURE_INDICES, within_k
         )
         for key in keys:
             m = metrics[key]
@@ -265,6 +273,7 @@ def _render_metrics_table_figure(
     """
     max_rows = max(len(df) for _, df in tables)
     fig, axes = plt.subplots(1, len(tables), figsize=(5.5 * len(tables), 0.4 * max_rows + 3))
+    axes = np.atleast_1d(axes)
     for ax, (title, df) in zip(axes, tables, strict=True):
         ax.axis("off")
         cell_text = [
@@ -335,8 +344,7 @@ def build_pdf_report(
     pdf_path: Path,
     metrics_df: pd.DataFrame,
     orig: np.ndarray,
-    regr: np.ndarray,
-    cross: np.ndarray,
+    predictions: dict[str, np.ndarray],
     keys: list[str],
     source_label: str,
 ) -> None:
@@ -349,8 +357,8 @@ def build_pdf_report(
     :param pdf_path: Destination path for the PDF file.
     :param metrics_df: Metrics, as returned by :func:`_compute_metrics_df`.
     :param orig: ``(N, 9)`` ground-truth config values.
-    :param regr: ``(N, 9)`` config-encoder self-reconstruction predictions.
-    :param cross: ``(N, 9)`` graph-encoder -> theta cross-modal predictions.
+    :param predictions: Maps each prediction path's mode name to its ``(N, 9)`` array of
+        predicted values, as returned by :func:`_reshape_predictions`.
     :param keys: Variable names, in column order.
     :param source_label: Run and dataset the metrics were computed from, printed on the report's
         title page.
@@ -361,21 +369,21 @@ def build_pdf_report(
                 f"Per-variable regression metrics -- {mode}",
                 metrics_df[metrics_df["mode"] == mode],
             )
-            for mode in ("regr", "cross")
+            for mode in predictions
         ]
         table_fig = _render_metrics_table_figure(tables, source_label=source_label)
         pdf.savefig(table_fig)
         plt.close(table_fig)
 
-        for mode, predictions in (("regr", regr), ("cross", cross)):
+        for mode, preds in predictions.items():
             for i, key in enumerate(keys):
                 label = f"{mode}/{key}"
 
-                scatter_fig = scatter_pred_vs_true(orig[:, i], predictions[:, i], label)
+                scatter_fig = scatter_pred_vs_true(orig[:, i], preds[:, i], label)
                 pdf.savefig(scatter_fig)
                 plt.close(scatter_fig)
 
-                residual_fig = residual_histogram(orig[:, i], predictions[:, i], label)
+                residual_fig = residual_histogram(orig[:, i], preds[:, i], label)
                 pdf.savefig(residual_fig)
                 plt.close(residual_fig)
 
@@ -418,10 +426,10 @@ def main() -> None:
     source_label, slug = _source_labels(source_meta, fallback)
     dataset = source_meta.get("dataset")
 
-    orig, regr, cross, keys, meta = _reshape_predictions(columns, data)
+    orig, predictions, keys, meta = _reshape_predictions(columns, data)
 
     print(f"Source: {source_label}")
-    metrics_df = _compute_metrics_df(orig, regr, cross, keys, args.within_k)
+    metrics_df = _compute_metrics_df(orig, predictions, keys, args.within_k)
     _print_metrics_df(metrics_df)
 
     report_dir_ctx = (
@@ -433,7 +441,7 @@ def main() -> None:
         # Every file carries the run and dataset in its name, so a report stays identifiable once
         # it is copied out of its directory or uploaded next to another dataset's report.
         pdf_path = report_dir / f"analysis_report_{slug}.pdf"
-        build_pdf_report(pdf_path, metrics_df, orig, regr, cross, keys, source_label=source_label)
+        build_pdf_report(pdf_path, metrics_df, orig, predictions, keys, source_label=source_label)
 
         metrics_df.to_csv(
             report_dir / f"regression_metrics_{slug}.csv", index=False, encoding="utf-8"

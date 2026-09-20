@@ -17,7 +17,7 @@ from analyse_predictions import (  # noqa: E402
 
 
 class TestReshapePredictions:
-    """Tests for _reshape_predictions."""
+    """Tests for _reshape_predictions against the supcon wrapper's three-kind layout."""
 
     _COLUMNS = ["sample", "instance", "replica", "n_norm", "xi_norm"]
     _DATA = [
@@ -31,15 +31,20 @@ class TestReshapePredictions:
 
     def test_strips_norm_suffix_from_keys(self) -> None:
         """Variable names have the _norm suffix stripped when no scaler was used."""
-        _, _, _, keys, _ = _reshape_predictions(self._COLUMNS, self._DATA)
+        _, _, keys, _ = _reshape_predictions(self._COLUMNS, self._DATA)
         assert keys == ["n", "xi"]
 
+    def test_predictions_has_one_entry_per_non_orig_kind(self) -> None:
+        """Predictions has one array per kind suffix other than 'orig'."""
+        _, predictions, _, _ = _reshape_predictions(self._COLUMNS, self._DATA)
+        assert set(predictions) == {"regr", "crsm"}
+
     def test_arrays_are_aligned_by_sample_and_kind(self) -> None:
-        """orig/regr/cross rows land in the array row matching their sample index."""
-        orig, regr, cross, _, _ = _reshape_predictions(self._COLUMNS, self._DATA)
+        """orig/regr/crsm rows land in the array row matching their sample index."""
+        orig, predictions, _, _ = _reshape_predictions(self._COLUMNS, self._DATA)
         np.testing.assert_array_equal(orig, [[100.0, 0.3], [200.0, 0.5]])
-        np.testing.assert_array_equal(regr, [[101.0, 0.31], [199.0, 0.49]])
-        np.testing.assert_array_equal(cross, [[98.0, 0.29], [205.0, 0.52]])
+        np.testing.assert_array_equal(predictions["regr"], [[101.0, 0.31], [199.0, 0.49]])
+        np.testing.assert_array_equal(predictions["crsm"], [[98.0, 0.29], [205.0, 0.52]])
 
     def test_sample_ids_sorted_numerically_not_lexically(self) -> None:
         """Sample ids like '2' and '10' sort as 2 < 10, not lexically ('10' < '2')."""
@@ -52,7 +57,7 @@ class TestReshapePredictions:
             ["10-regr", "inst-b", 1, 4.1],
             ["10-crsm", "inst-b", 1, 3.9],
         ]
-        orig, _, _, _, _ = _reshape_predictions(columns, data)
+        orig, _, _, _ = _reshape_predictions(columns, data)
         np.testing.assert_array_equal(orig, [[3.0], [4.0]])
 
     def test_keys_without_scaler_suffix_are_unchanged(self) -> None:
@@ -63,14 +68,37 @@ class TestReshapePredictions:
             ["0-regr", "inst-a", 0, 101.0],
             ["0-crsm", "inst-a", 0, 98.0],
         ]
-        _, _, _, keys, _ = _reshape_predictions(columns, data)
+        _, _, keys, _ = _reshape_predictions(columns, data)
         assert keys == ["n"]
 
     def test_meta_indexed_by_row_position_matching_arrays(self) -> None:
         """Meta holds one (instance, replica) row per sample, in the same order as the arrays."""
-        _, _, _, _, meta = _reshape_predictions(self._COLUMNS, self._DATA)
+        _, _, _, meta = _reshape_predictions(self._COLUMNS, self._DATA)
         assert list(meta["instance"]) == ["inst-a", "inst-b"]
         assert list(meta["replica"]) == [0, 1]
+
+
+class TestReshapePredictionsBaselineFormat:
+    """Tests for _reshape_predictions against the baseline wrapper's two-kind layout."""
+
+    _COLUMNS = ["sample", "instance", "replica", "n_norm", "xi_norm"]
+    _DATA = [
+        ["0-orig", "inst-a", 0, 100.0, 0.3],
+        ["0-pred", "inst-a", 0, 101.0, 0.31],
+        ["1-orig", "inst-b", 1, 200.0, 0.5],
+        ["1-pred", "inst-b", 1, 199.0, 0.49],
+    ]
+
+    def test_predictions_has_a_single_pred_entry(self) -> None:
+        """Only one non-orig kind ('pred') is present, so predictions has a single entry."""
+        _, predictions, _, _ = _reshape_predictions(self._COLUMNS, self._DATA)
+        assert set(predictions) == {"pred"}
+
+    def test_arrays_are_aligned_by_sample(self) -> None:
+        """orig/pred rows land in the array row matching their sample index."""
+        orig, predictions, _, _ = _reshape_predictions(self._COLUMNS, self._DATA)
+        np.testing.assert_array_equal(orig, [[100.0, 0.3], [200.0, 0.5]])
+        np.testing.assert_array_equal(predictions["pred"], [[101.0, 0.31], [199.0, 0.49]])
 
 
 class TestComputeMetricsRows:
@@ -83,17 +111,27 @@ class TestComputeMetricsRows:
     _CROSS = np.array([[11.0, 0.31], [19.0, 0.49], [16.0, 0.42]])
 
     def test_one_row_per_variable_and_path(self) -> None:
-        """The rows list has len(keys) * len(paths) entries, one per (variable, path) pair."""
-        df = _compute_metrics_df(self._ORIG, self._REGR, self._CROSS, self._KEYS, within_k=1)
+        """The rows list has len(keys) * len(predictions) entries, one per (variable, mode) pair."""
+        df = _compute_metrics_df(
+            self._ORIG, {"regr": self._REGR, "crsm": self._CROSS}, self._KEYS, within_k=1
+        )
         assert len(df) == 4
         assert set(df["variable"]) == {"n", "xi"}
-        assert set(df["mode"]) == {"regr", "cross"}
+        assert set(df["mode"]) == {"regr", "crsm"}
 
     def test_missing_within_k_accuracy_becomes_none(self) -> None:
         """Variables outside ABCD_INT_FEATURE_INDICES get None for within_k_accuracy."""
-        df = _compute_metrics_df(self._ORIG, self._REGR, self._CROSS, self._KEYS, within_k=1)
+        df = _compute_metrics_df(
+            self._ORIG, {"regr": self._REGR, "crsm": self._CROSS}, self._KEYS, within_k=1
+        )
         assert df.loc[df["variable"] == "xi", "within_k_accuracy"].isna().all()
         assert df.loc[df["variable"] == "n", "within_k_accuracy"].notna().all()
+
+    def test_single_prediction_path(self) -> None:
+        """A single-mode predictions dict (baseline layout) produces one row per variable."""
+        df = _compute_metrics_df(self._ORIG, {"pred": self._REGR}, self._KEYS, within_k=1)
+        assert len(df) == 2
+        assert set(df["mode"]) == {"pred"}
 
 
 class TestLoadLocalPredictionsTable:
@@ -114,11 +152,11 @@ class TestLoadLocalPredictionsTable:
 
         assert loaded_columns == columns
         assert loaded_data == data
-        orig, regr, cross, keys, _ = _reshape_predictions(loaded_columns, loaded_data)
+        orig, predictions, keys, _ = _reshape_predictions(loaded_columns, loaded_data)
         assert keys == ["n", "xi"]
         np.testing.assert_array_equal(orig, [[100.0, 0.3]])
-        np.testing.assert_array_equal(regr, [[101.0, 0.31]])
-        np.testing.assert_array_equal(cross, [[98.0, 0.29]])
+        np.testing.assert_array_equal(predictions["regr"], [[101.0, 0.31]])
+        np.testing.assert_array_equal(predictions["crsm"], [[98.0, 0.29]])
 
     def test_returns_meta_block(self, tmp_path: Path) -> None:
         """The meta block naming the run and dataset is returned as stored."""
