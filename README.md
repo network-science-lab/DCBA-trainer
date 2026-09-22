@@ -62,6 +62,25 @@ allowing the model to be evaluated on configurations already encountered during 
 
 ## Running the code
 
+Inference:
+
+```bash
+uv run python scripts/example_inference.py
+```
+
+The script builds an LFR benchmark graph with networkx, rebuilds the architecture from the matching
+config, and prints the recovered config next to the parameters LFR was asked for. Swap models with
+the `MODEL` constant at the top to chose one of the following experiments:
+
+| `MODEL`                           | Node features          |
+| --------------------------------- | ---------------------- |
+| `gps-ae-supcon-log-scaler`        | `ConstantNodeFeatures` |
+| `gps-ae-supcon-log-scaler-comm`   | `CommunityToSize`      |
+| `gps-ae-supcon-log-scaler-comm-b` | `CommunityToSize`      |
+
+The first was trained with constant node features, so it reads nothing but the graph structure and
+applies to any edge list; the other two take a community label per node.
+
 Training:
 
 ```bash
