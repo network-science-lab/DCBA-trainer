@@ -125,18 +125,23 @@ If you use the code, please consider citing us:
 
 ```bibtex
 @inproceedings{stolarski2026dcba,
-   title={Graph Data Augmentation via Contrastive Generator Inversion (DCBA)},
-   author={
+   title = {Graph Data Augmentation via Contrastive Generator Inversion (DCBA)},
+   author = {
       Stolarski, Mateusz and Czuba, Micha{\l} and Krai\'{n}ski, \L{}ukasz and Musial, Katarzyna and
       Pra\l{}at, Pawe\l{} and Kami\'{n}ski, Bogumi\l{} and Br{\'o}dka, Piotr
    },
+   booktitle = {Proceedings of the Fifth Learning on Graphs Conference},
+   series = {Proceedings of Machine Learning Research},
+   publisher = {PMLR},
+   year = {2026},
+   doi = {10.48550/arXiv.2610.05653},
 }
 ```
 
 ## Acknowledgement
 
-This research was partially supported by: (1) National Science Centre, Poland, grant no.
-2022/45/B/ST6/04145; (2) Polish National Agency for Academic Exchange, Strategic Partnerships, grant
-no. BPI/PST/2024/1/00129/U/00001; (3) Wrocław Tech, Academia Professorum Iuniorum. Views and
-opinions expressed here are those of the authors only and do not necessarily reflect those of the
-funding agencies.
+This research was partially supported by: Horizon Europe, EU, grant no. 10108632; National Science
+Centre, Poland, grant no. 2022/45/B/ST6/04145; Polish National Agency for Academic Exchange,
+Strategic Partnerships, grant no. BPI/PST/2024/1/00129/U/00001; Wrocław University of Science and
+Technology, Academia Professorum Iuniorum and  Minigrants projects. Views and opinions expressed
+here are those of the authors and do not necessarily reflect those of the funding agencies.
